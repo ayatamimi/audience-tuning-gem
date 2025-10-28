@@ -1,0 +1,29 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.so
+*.pt
+*.pth
+*.pptx
+
+# Virtual env
+.venv/
+venv/
+
+# Logs / data
+*.log
+*.tmp
+*.png
+*.npy
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+mdl_checkpoints/
+UTKFace_dataset_subset_10000/
+UTKFace_dataset_subset_150000/
+UTKFace_dataset_subset_15000/
+
+# IDE
+.vscode/
+.idea/
