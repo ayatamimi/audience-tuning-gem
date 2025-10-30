@@ -9,6 +9,22 @@ from torch.utils.data import DataLoader,Dataset
 from tqdm import tqdm
 import distributed as dist
 
+# =============================================================================
+# DataParallel removed: on a single GPU, DataParallel wastes memory duplicating the model.
+# 
+# AMP (autocast + GradScaler): cuts activation/grad memory roughly in half for Transformers.
+# 
+# Gradient accumulation: keeps the effective batch size while lowering --batch_size if needed.
+# 
+# Allocator tweak expandable_segments:True: reduces fragmentation (helps after many steps).
+# =============================================================================
+
+
+
+# help the CUDA allocator avoid fragmentation (esp. with variable batch shapes)
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+ 
+
 os.environ["TRANSFORMERS_NO_TF"] = "1"    # block TensorFlow import inside transformers
 os.environ["TRANSFORMERS_NO_FLAX"] = "1"  # block Flax, too (optional)
 # optional hard stop if TF somehow slips in:
@@ -41,29 +57,35 @@ class CustomDataset(Dataset):
         return self.inputs[idx], self.labels[idx]
 
 
-def train(epoch, loader, model, optimizer, scheduler, device, val_loader=None):
+def train(epoch, loader, model, optimizer, scheduler, device, val_loader=None, grad_accum_steps=1, scaler=None):
     if dist.is_primary():
         loader = tqdm(loader)
     model.train()
     
-    loss = 0
-    i=0
-    for i, (input, label) in enumerate(loader):
-        
-        model.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
+    for step, (input, label) in enumerate(loader):
         input = input.to(device)
         label = label.to(device)
         
-        i = i+1
-        outputs = model(inputs_embeds = input,labels =label)
-        index = torch.argmax(outputs.logits, dim=2)
 
-        loss, logits = outputs[:2]
-        
-        loss = loss.mean()
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
+        # ---- mixed precision forward/backward ----
+        if scaler is not None:
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                outputs = model(inputs_embeds=input, labels=label)
+                loss = outputs.loss.mean()
+            scaler.scale(loss / grad_accum_steps).backward()
+        else:
+            outputs = model(inputs_embeds=input, labels=label)
+            loss = outputs.loss.mean()
+            (loss / grad_accum_steps).backward()
+
+        if (step + 1) % grad_accum_steps == 0:
+            if scaler is not None:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
         if scheduler is not None:
             scheduler.step()
         
@@ -77,7 +99,7 @@ def train(epoch, loader, model, optimizer, scheduler, device, val_loader=None):
                     f"lr: {lr:.5f}"
                 )
             )
-        run["train/transformer-loss"].log(loss)
+        run["train/transformer-loss"].log(loss.item())
         run["train/transformer-lr"].log(lr)
 
 
@@ -85,34 +107,25 @@ def train(epoch, loader, model, optimizer, scheduler, device, val_loader=None):
     if val_loader is not None:
         if dist.is_primary():
             val_loader = tqdm(val_loader)
-            model.eval()
+        model.eval()
         average_loss = 0
-        val_loss = 0
-        i=0    
-        j=0
-        for i, (input, label) in enumerate(val_loader):
-        
-            if(i%500 ==0):
-                j = j+1
-                model.zero_grad()
-                
+
+        total, count = 0.0, 0
+        with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.float16 if scaler is not None else None):
+            for input, label in val_loader:
                 input = input.to(device)
                 label = label.to(device)
-                
-                i = i+1
-                outputs = model(inputs_embeds = input,labels =label)
-                val_loss, _ = outputs[:2]
-                val_loss = val_loss.mean()
-                run["validation/transformer-loss"].log(val_loss)
-                average_loss += val_loss
-
-                val_loader.set_description(
-                        (
-                            f"Validation loss: {val_loss:.5f} "
-                        )
-                    )
-        average_loss = average_loss/ j
-        run["validation/transformer-average_loss_per_epoch"].log(average_loss)
+                outputs = model(inputs_embeds=input, labels=label)
+                val_loss = outputs.loss.mean()
+                bs = input.size(0)
+                total += val_loss.item() * bs
+                count += bs
+                if dist.is_primary():
+                    val_loader.set_description(f"Validation loss: {val_loss.item():.5f}")
+                    run["validation/transformer-loss"].log(val_loss.item())
+        average_loss = total / max(1, count)
+        if dist.is_primary():
+            run["validation/transformer-average_loss_per_epoch"].log(average_loss)
         return average_loss
         
 
@@ -219,10 +232,8 @@ def main(args):
             max_position_embeddings=n_tokens
     )
 
-    model = DistilBertForMaskedLM(cfg)
+    model = DistilBertForMaskedLM(cfg).to(device)
     # model.load_state_dict(torch.load(args.ckpt_distil))
-    model = torch.nn.DataParallel(model)
-    model = model.to(device)
 
     #Count model parameters
     parameters = list(model.parameters())
@@ -233,12 +244,7 @@ def main(args):
     print("trainable")
     print(sum(p.numel() for p in unique))
 
-    if args.distributed:
-        model = nn.parallel.DistributedDataParallel(
-            model,
-            device_ids=[dist.get_local_rank()],
-            output_device=dist.get_local_rank(),
-        )
+    # DDP left disabled here since we are using a single visible GPU.
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.005)
     scheduler = None
@@ -253,23 +259,28 @@ def main(args):
     warmup = 0.01
     run["parameters/transformer-warmup"].log(warmup)
 
+
+
+    # AMP scaler + gradient accumulation
+    scaler = torch.cuda.amp.GradScaler()
+    grad_accum_steps = max(1, 2 if args.batch_size >= 8 else 1)  # tweak as needed
+
     #Train
     j=0
     min_validation_loss = np.inf
     for i in range(args.epoch):
         j = j+1
         print(len(train_dataloader))
-        #train(i, train_dataloader, model, optimizer, scheduler, device)
         torch.cuda.empty_cache()
-        validation_loss =train(i, train_dataloader, model, optimizer, scheduler, device, val_dataloader)
+        validation_loss = train(i, train_dataloader, model, optimizer, scheduler, device,
+                                val_loader=val_dataloader, grad_accum_steps=grad_accum_steps, scaler=scaler)
+
         run["train/transformer-epoch"].log(j)
         if validation_loss< min_validation_loss:
             min_validation_loss = validation_loss
             print(f'Validation loss decreased to : {min_validation_loss}')
         
         if dist.is_primary():
-            if isinstance(model, torch.nn.DataParallel):
-                model = model.module
             torch.save(model.state_dict(), f"/local/altamabp/checkpoint_correct/distil/80x80_100ClassImagenet_flat_144x456codebook_75mask_epoch{str(j).zfill(3)}.pt")
 
 
