@@ -23,7 +23,7 @@ def make_transform(size=None):
     ops += [transforms.ToTensor()]  # HWC [0..255] -> CHW float [0..1]
     return transforms.Compose(ops)
 
-# Flat dataset (no class subfolders) — adjust extensions as needed
+# Flat dataset (no class subfolders) 
 class FlatImageDataset(Dataset):
     def __init__(self, root, transform=None, extensions=("jpg","jpeg","png","bmp","webp")):
         self.root = str(root)
