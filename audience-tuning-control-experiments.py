@@ -1,3 +1,9 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Nov  1 19:06:15 2025
+
+@author: ayata
+"""
 import numpy as np
 import matplotlib.pyplot as plt
 import argparse
@@ -21,61 +27,39 @@ run = neptune.init_run(
     capture_stdout=False,
     capture_stderr=False,
     #with_id="distil",
-    source_files=["flat_reconstruct_random_based.py"]
+    source_files=["audience-tuning-control_experiments.py"]
 )
 
-def gradual_masking( distil, quantized,indices, mask_percentage):
-    total_num = quantized.shape[1] 
-    total_unmasked_number = (int) (total_num * (1-mask_percentage))
-    unmask_index = (int) (total_num/2)
-    quantized_masked = torch.zeros_like(quantized)
-    mask = torch.ones(quantized.shape[:2], dtype=torch.bool)
-    already_unmasked = set()
-    for i in range(0,total_unmasked_number):
-        mask[0,unmask_index] = False
-        already_unmasked.add(unmask_index)
-        quantized_masked[0, unmask_index] = quantized[0,unmask_index]
-        outputs = distil(inputs_embeds = quantized_masked, output_hidden_states = True)
-        max_logits, max_indices = torch.max(outputs.logits, dim=-1)
-        sorted_logits, sorted_indices = torch.sort(max_logits[0])
-        for min_index in sorted_indices:
-            if min_index.item() not in already_unmasked:
-                unmask_index = min_index.item()
-                break
-    indices_masked = indices.clone()
-    #indices_masked[~mask[0]] = -100
-    return quantized_masked,indices_masked, mask[0]
 
-def random_mask(unmasked, indices_unmasked,n_sample, n_token, mask_perc):
+def attach_bias_mask_feat(labels, masked_quantizes, mask, mask_perc):
     
-    mask = np.random.default_rng().choice([True, False], size=(1,1, n_token), p=[mask_perc, 1 - mask_perc])
-    masked = unmasked.clone()
-    masked[mask] = 0  # Assuming 0 is the mask token
-    indices_masked = indices_unmasked.clone()
-    #indices_masked[~mask[0]] = -100 # Assuming -100 is the mask label token
+    idx_t = torch.as_tensor(labels, dtype=torch.long, device=masked_quantizes.device)  # (N,)
+
+    N, T, _ = masked_quantizes.shape
+    idx_t_exp = idx_t.unsqueeze(1).expand(N, T)                         # (N, T)
+
+    one_hot_labels = torch.nn.functional.one_hot(idx_t_exp, num_classes=10).to(dtype=masked_quantizes.dtype)  # (N,T,C)
+
+    masked_exp_quantizes = torch.cat([masked_quantizes, one_hot_labels], dim=2)
+
+
+    print('masked_exp_quantizes.shape: ',masked_exp_quantizes.shape)  # torch.Size([160000, 400, 74])
+    # masked_exp_train_quantizes: torch.FloatTensor (N, T, 74)
+    # mask_train: numpy bool array (N, T)  True = masked
+
+    device = masked_exp_quantizes.device
+    dtype  = masked_exp_quantizes.dtype
+    
+   # 1) NumPy -> Torch, cast to float (1.0 masked, 0.0 unmasked)
+    mask_feat = torch.as_tensor(mask, device=device).to(dtype)   # (N, T)
+
+    # 2) Add feature axis
+    mask_feat = mask_feat.unsqueeze(-1)                                 # (N, T, 1)
+
+    # 3) Concatenate
+    masked_exp_mask_feat_quantizes = torch.cat([masked_exp_quantizes, mask_feat], dim=-1)  # (N, T, 75)
    
-    return masked, indices_masked, mask[0][0]
-
-def confidence_based_mask(logits,
-                                 unmasked, indices_unmasked, n_token,
-                                 length, mask_percentage):
-
-    max_logits = np.max(logits.detach().cpu().numpy(), axis=-1)
-    flattened_max_logits = max_logits.flatten()
-    num_locations = flattened_max_logits.size
-    num_masked_locations = int(num_locations * mask_percentage)
-    sorted_indices = np.argsort(flattened_max_logits)[::-1]
-    mask = np.zeros_like(flattened_max_logits, dtype=bool)
-    mask[sorted_indices[:num_masked_locations]] = True
-
-    masked = np.copy(unmasked)
-    masked[mask] = 0  # Assuming 0 is the mask token
-    masked = torch.from_numpy(masked)
-    indices_masked = np.copy(indices_unmasked)
-    #indices_masked[~mask] = -100 # Assuming -100 is the mask label token
-    indices_masked = torch.from_numpy(indices_masked)
-
-    return masked, indices_masked, mask
+    return masked_exp_mask_feat_quantizes
 
 def main(args):
     torch.cuda.set_device(2)
@@ -114,7 +98,7 @@ def main(args):
             max_position_embeddings=n_token
     )
     model_distil = DistilBertForMaskedLM(cfg).to(device)
-    model_distil.load_state_dict(torch.load(args.ckpt_distil))
+    model_distil.load_state_dict(torch.load(args.ckpt_distil_combined))
     model_distil = model_distil.to(device)
     model_distil.eval()
 
@@ -125,20 +109,12 @@ def main(args):
     model_vqvae.eval()
 
     # Define classifier and load saved model(weights)
-# =============================================================================
-#     weights = ResNet50_Weights.IMAGENET1K_V2
-#     preprocess = weights.transforms()
-#     classifier = resnet50(pretrained=False)
-# =============================================================================
-
     classifier = resnet50(weights=None)
-
     classifier.fc = nn.Linear(classifier.fc.in_features, 10)  
+    
     classifier.load_state_dict(torch.load(args.ckpt_resnet50))
     classifier.to(device)
     classifier.eval()
-    weights= classifier.weights
-    preprocess = weights.transforms()
 
     mask_percentages = np.arange(0.1, 1.1, 0.1)
     mask_percentages = np.append(mask_percentages,[.85,.95])
@@ -256,10 +232,9 @@ if __name__ == "__main__":
         + hash(os.getuid() if sys.platform != "win32" else 1) % 2 ** 14
     )
     parser.add_argument("--dist_url", default=f"tcp://127.0.0.1:{port}")
+    parser.add_argument("--batch_size", type=int, default=batchsize_modified)#
     parser.add_argument('--ckpt_vqvae', type=str, default="/local/altamabp/checkpoint_correct/vqvae/model_epoch100_flat_vqvae80x80_64x400codebook.pth")
-    parser.add_argument('--ckpt_distil', type=str, default="/local/altamabp/checkpoint_correct/distil/80x80_100_UTKFace_flat_144x400codebook_50mask_epoch015_without-ignore-index.pt")
+    parser.add_argument('--ckpt_distil_combined', type=str, default="/local/altamabp/checkpoint_correct/distil/80x80_100_UTKFace_flat_144x400codebook_50mask_epoch100-.pt")
     parser.add_argument('--ckpt_resnet50', type=str, default="/local/altamabp/checkpoint/classifier/weights_epoch100_fullTrain.pth")
-
     args = parser.parse_args()
     dist.launch(main, args.n_gpu, 1, 0, args.dist_url, args=(args,))
-
