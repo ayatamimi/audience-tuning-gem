@@ -165,7 +165,7 @@ def main(args):
     masked_train_indices[mask_train] = mask_token
 
     train_indices_label = np.copy(train_indices)
-    train_indices_label[~mask_train] = mask_token_label
+    #train_indices_label[~mask_train] = mask_token_label
     train_quantizes = torch.from_numpy(train_quantizes)
     masked_train_indices = torch.from_numpy(masked_train_indices)
     train_indices_label = torch.from_numpy(train_indices_label)
@@ -184,7 +184,7 @@ def main(args):
     masked_val_data = np.copy(val_quantizes)
     masked_val_data[mask_val] = mask_token
     val_indices_label = np.copy(val_indices)
-    val_indices_label[~mask_val] = mask_token_label
+    #val_indices_label[~mask_val] = mask_token_label
     masked_val_data = torch.from_numpy(masked_val_data)
     val_indices_label = torch.from_numpy(val_indices_label)
 
