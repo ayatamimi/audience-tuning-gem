@@ -6,6 +6,19 @@ __pycache__/
 *.pth
 *.pptx
 
+# Scripts
+move_1000_img_per_class.py
+restructure-test-data-folder.py
+pipeline_vqvae-transformer-classification_gpu01_correct_final-automated_norm01-Vanilla.py
+pipeline_vqvae-transformer-classification_gpu01_correct_final-automated_norm01.py
+pipeline_vqvae-transformer-classification_gpu01_correct_final-automated_norm01_trans-loss-goes-down.py
+pipeline_vqvae_transformer_classification.py
+train_vqvae.py
+
+kernel-1353196.jason
+
+
+
 # Virtual env
 .venv/
 venv/
