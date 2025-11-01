@@ -260,10 +260,10 @@ def main(args):
 ################Create Data loaders###################
 
     print(f"vocab_size: {vocab_size} ")
-    print(f"z_q shape: {train_quantizes.shape} ")
-    print(f"indices shape: {train_indices.shape} ")
+    print(f"z_q shape: {masked_exp_mask_feat_train_quantizes.shape} ")
+    print(f"indices shape: {train_indices_label.shape} ")
     print(n_train_samples)
-    print(d_embed_vec)
+    print(distil_d_embed_vec)
     print(n_tokens)
 
     train_data = CustomDataset(masked_exp_mask_feat_train_quantizes, train_indices_label, mask_perc,n_train_samples,n_tokens, mask_token)
@@ -298,7 +298,6 @@ def main(args):
     # DDP left disabled here since we are using a single visible GPU.
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.005)
-    scheduler = None
     if args.sched == "linearW":
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
