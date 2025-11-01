@@ -147,61 +147,62 @@ def main(args):
         correct_random_pred = 0
         tot_sample = 0
         for x in range(0,quantizes.shape[0]):
-            print(x)
-            q = torch.from_numpy(quantizes[x])
-            index = torch.from_numpy(indices[x])
-            index = index.to(device)
-            q = q.to(device)
-            q = torch.reshape(q, (1, q.size(dim=0), q.size(dim=1)))
-            
-            with torch.no_grad():
-                q_masked, index_masked, mask = random_mask(q, index , n_sample, n_token,perc)                                
-                q_masked = q_masked.to(device)
-                index_masked = index_masked.to(device)
-
-            #Fill in predicted tokens
-            with torch.no_grad():
-                outputs = model_distil(inputs_embeds = q_masked, output_hidden_states = True)
-                confidence_based_prediction = torch.argmax(outputs.logits, dim=2)
-                confidence_based_recons_index = index
-                print(mask.shape)
-                for p in range(0,n_token):
-                    if(mask[p]):
-                        #confidence_based_recons_index[p] = confidence_based_prediction.detach().cpu().numpy()[0][p] 
-                        confidence_based_recons_index[p] = confidence_based_prediction[0][p] 
+            if x%1000 ==0:
+                print(x)
+                q = torch.from_numpy(quantizes[x])
+                index = torch.from_numpy(indices[x])
+                index = index.to(device)
+                q = q.to(device)
+                q = torch.reshape(q, (1, q.size(dim=0), q.size(dim=1)))
                 
-                #Reconstruct with distil predictions
-                confidence_based_recons_index = confidence_based_recons_index.to(device)
-                distil_out = model_vqvae.decode_code(torch.reshape(confidence_based_recons_index, (1,length,length)).to(device))
-
-                #Reconstruct Original
-                vqvae_out = model_vqvae.decode(torch.from_numpy(quant_b[x]).to(device)) #torch.reshape(torch.from_numpy(indices[x]), (1,length,length)).to(device)
-                index_masked_forvis = index.clone()
-                index_masked_forvis[mask]=0
-                vqvae_masked_out = model_vqvae.decode_code(torch.reshape(index_masked_forvis, (1,length,length)).to(device))
-
-                # Label outputs
-                vqvae_out = vqvae_out.unsqueeze(0)
-                vqvae_img = preprocess(vqvae_out)
-                vqvae_img = vqvae_img.to(device)
-                vqvae_img_prob = classifier(vqvae_img)
-                _, vqvae_img_label = torch.max(vqvae_img_prob, 1)
-                
-                rand_mask_img = preprocess(distil_out)
-                rand_mask_img = rand_mask_img.to(device)
-                rand_mask_img_prob = classifier(rand_mask_img)
-                _, rand_mask_img_label = torch.max(rand_mask_img_prob, 1)
-                correct_random_pred += (rand_mask_img_label == vqvae_img_label).sum().item()
-                print(f'rand_mask_img_label is {rand_mask_img_label}')
-                print(f'vqvae_img_label is {vqvae_img_label}')
-                print(f'rand_mask_img_label is {rand_mask_img_label.item()}')
-                print(f'vqvae_img_label is {vqvae_img_label.item()}')
-                print(f'correct_random_pred is {correct_random_pred}')
-                tot_sample += 1
-                print(tot_sample)
-
-
-                if x%5 ==0:
+                with torch.no_grad():
+                    q_masked, index_masked, mask = random_mask(q, index , n_sample, n_token,perc)                                
+                    q_masked = q_masked.to(device)
+                    index_masked = index_masked.to(device)
+    
+                #Fill in predicted tokens
+                with torch.no_grad():
+                    outputs = model_distil(inputs_embeds = q_masked, output_hidden_states = True)
+                    confidence_based_prediction = torch.argmax(outputs.logits, dim=2)
+                    confidence_based_recons_index = index
+                    print(mask.shape)
+                    for p in range(0,n_token):
+                        if(mask[p]):
+                            #confidence_based_recons_index[p] = confidence_based_prediction.detach().cpu().numpy()[0][p] 
+                            confidence_based_recons_index[p] = confidence_based_prediction[0][p] 
+                    
+                    #Reconstruct with distil predictions
+                    confidence_based_recons_index = confidence_based_recons_index.to(device)
+                    distil_out = model_vqvae.decode_code(torch.reshape(confidence_based_recons_index, (1,length,length)).to(device))
+    
+                    #Reconstruct Original
+                    vqvae_out = model_vqvae.decode(torch.from_numpy(quant_b[x]).to(device)) #torch.reshape(torch.from_numpy(indices[x]), (1,length,length)).to(device)
+                    index_masked_forvis = index.clone()
+                    index_masked_forvis[mask]=0
+                    vqvae_masked_out = model_vqvae.decode_code(torch.reshape(index_masked_forvis, (1,length,length)).to(device))
+    
+                    # Label outputs
+                    vqvae_out = vqvae_out.unsqueeze(0)
+                    vqvae_img = preprocess(vqvae_out)
+                    vqvae_img = vqvae_img.to(device)
+                    vqvae_img_prob = classifier(vqvae_img)
+                    _, vqvae_img_label = torch.max(vqvae_img_prob, 1)
+                    
+                    rand_mask_img = preprocess(distil_out)
+                    rand_mask_img = rand_mask_img.to(device)
+                    rand_mask_img_prob = classifier(rand_mask_img)
+                    _, rand_mask_img_label = torch.max(rand_mask_img_prob, 1)
+                    correct_random_pred += (rand_mask_img_label == vqvae_img_label).sum().item()
+                    print(f'rand_mask_img_label is {rand_mask_img_label}')
+                    print(f'vqvae_img_label is {vqvae_img_label}')
+                    print(f'rand_mask_img_label is {rand_mask_img_label.item()}')
+                    print(f'vqvae_img_label is {vqvae_img_label.item()}')
+                    print(f'correct_random_pred is {correct_random_pred}')
+                    tot_sample += 1
+                    print(tot_sample)
+    
+    
+                    #if x%1000 ==0:
                     utils.save_image(
                         torch.cat([vqvae_out, vqvae_masked_out, distil_out], 0).to(device),
                         f"image_correct/recons/random/80x80_random_{vqvae_img_label.item()}_{rand_mask_img_label.item()}_{int(perc*100)}_{str(x).zfill(5)}.png",
@@ -209,13 +210,14 @@ def main(args):
                         normalize=True,
                         range=(-1, 1),
                     )
-            
-            recon_loss = criterion(distil_out, vqvae_out)
-            run["recons/mse_per_image_random_mask"].log(recon_loss.item())
-            reconstruction_errors.append(recon_loss.item())
-            class_loss = criterion_class(rand_mask_img_prob, vqvae_img_prob)
-            run["recons/cross_entropy_per_image_random_mask"].log(class_loss.item())
-            cross_entropy_class_err.append(class_loss.item())
+                
+                recon_loss = criterion(distil_out, vqvae_out)
+                run["recons/mse_per_image_random_mask"].log(recon_loss.item())
+                reconstruction_errors.append(recon_loss.item())
+                class_loss = criterion_class(rand_mask_img_prob, vqvae_img_prob)
+                run["recons/cross_entropy_per_image_random_mask"].log(class_loss.item())
+                cross_entropy_class_err.append(class_loss.item())
+        
         run["recons/average_mse_per_precision_random_mask"].log(np.mean(reconstruction_errors))
         run["recons/average_cross_entropy_error_random_mask"].log(np.mean(cross_entropy_class_err))
         average_errors.append(np.mean(reconstruction_errors))
@@ -247,8 +249,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--dist_url", default=f"tcp://127.0.0.1:{port}")
     parser.add_argument("--batch_size", type=int, default=batchsize_modified)#64
-    parser.add_argument('--ckpt_vqvae', type=str, default="/home/abghamtm/work/masking_comparison/checkpoint/vqvae/model_epoch80_flat_vqvae80x80_144x456codebook.pth")
-    parser.add_argument('--ckpt_distil_combined', type=str, default="/home/abghamtm/work/masking_comparison/checkpoint/distil/80x80_100ClassImagenet_flat_144x456codebook_75mask_epoch100.pt")
+    parser.add_argument('--ckpt_vqvae', type=str, default="/local/altamabp/checkpoint_correct/vqvae/model_epoch100_flat_vqvae80x80_64x400codebook.pth")
+    parser.add_argument('--ckpt_distil_combined', type=str, default="/local/altamabp/checkpoint_correct/distil/80x80_100_UTKFace_flat_144x400codebook_50mask_epoch100-.pt")
 
     args = parser.parse_args()
     dist.launch(main, args.n_gpu, 1, 0, args.dist_url, args=(args,))

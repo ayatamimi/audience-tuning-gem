@@ -127,6 +127,7 @@ def train(epoch, loader, model, optimizer, scheduler, device, val_loader=None, g
         if dist.is_primary():
             run["validation/transformer-average_loss_per_epoch"].log(average_loss)
         return average_loss
+    
         
 def attach_bias_mask_feat(labels, masked_quantizes, mask, mask_perc):
     
@@ -209,7 +210,7 @@ def main(args):
 
     mask_token =0 
     mask_token_label = -100
-    mask_perc = 0.75
+    mask_perc = 0.50
     mask_train = np.random.default_rng().choice([True, False], size=(n_train_samples, n_tokens), p=[mask_perc, 1 - mask_perc])
     run["data/mask_prec"].log(mask_perc)
     train_quantizes = train_quantizes.reshape((n_train_samples, n_tokens, d_embed_vec))
@@ -331,7 +332,7 @@ def main(args):
             print(f'Validation loss decreased to : {min_validation_loss}')
         
         if dist.is_primary():
-            torch.save(model.state_dict(), f"/local/altamabp/checkpoint_correct/distil/80x80_100ClassImagenet_flat_144x456codebook_75mask_epoch{str(j).zfill(3)}.pt")
+            torch.save(model.state_dict(), f"/local/altamabp/checkpoint_correct/distil/80x80_100_UTKFace_flat_144x400codebook_50mask_epoch{str(j).zfill(3)}_with-ignore-index.pt")
 
 
 batchsize_modified=16
