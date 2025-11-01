@@ -232,7 +232,7 @@ def main(args):
     
     masked_exp_mask_feat_train_quantizes = attach_bias_mask_feat (train_labels, masked_train_quantizes, mask_train, mask_perc)
     print('masked_exp_mask_feat_train_quantizes.shape: ',masked_exp_mask_feat_train_quantizes.shape)
-
+    distil_d_embed_vec = masked_exp_mask_feat_train_quantizes.shape[2]
 
 ############### Data prepration and masking/ validation set#####################
 
@@ -276,7 +276,7 @@ def main(args):
 #####################Model Config###########################
     cfg = DistilBertConfig(
             vocab_size=vocab_size,
-            hidden_size=d_embed_vec,
+            hidden_size=distil_d_embed_vec,
             sinusoidal_pos_embds=False,
             n_layers=6,
             n_heads=5,
