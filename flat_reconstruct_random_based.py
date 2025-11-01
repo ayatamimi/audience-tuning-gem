@@ -16,11 +16,12 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 run = neptune.init_run(
-    project="tns/Vqvae-transformer",
-    api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiIwODg4OTU0Yy0xODAyLTRiM2QtYjYzYi0xMWQxYThmYWJlOWQifQ==",
-    capture_stdout = False,
-    capture_stderr = False,
-    # with_id="MAS-389"
+    project="UTKFaces",
+    api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiIwMmExYTliOC1mYjkyLTQ4M2YtYjFiYS1iZWQ1Y2E0OTJlNTkifQ==",
+    capture_stdout=False,
+    capture_stderr=False,
+    #with_id="distil",
+    source_files=["flat_reconstruct_random_based.py"]
 )
 
 def gradual_masking( distil, quantized,indices, mask_percentage):
@@ -82,11 +83,11 @@ def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     args.distributed = dist.get_world_size() > 1
 
-    indices = np.load('/home/abghamtm/work/masking_comparison/checkpoint/vqvae/indices_epoch80_flat_vqvae80x80_144x456codebook.npy')
+    indices = np.load('/local/altamabp/test_latent_space_vqvae_80x80_codebook_64x456.npy')
     n, h, w = indices.shape
     indices = indices.reshape(n, h * w)
 
-    quantizes = np.load('/home/abghamtm/work/masking_comparison/checkpoint/vqvae/quantized_epoch80_flat_vqvae80x80_144x456codebook.npy')
+    quantizes = np.load('/local/altamabp/test_codebook_vqvae_80x80_codebook_64x456.npy')
     quant_b = quantizes
     n, c, h, w = quantizes.shape
     quantizes = quantizes.transpose(0, 2, 3, 1)
@@ -109,7 +110,7 @@ def main(args):
             hidden_size=d_embed_vec,
             sinusoidal_pos_embds=False,
             n_layers=6,
-            n_heads=4,
+            n_heads=5,
             max_position_embeddings=n_token
     )
     model_distil = DistilBertForMaskedLM(cfg).to(device)
@@ -127,7 +128,7 @@ def main(args):
     weights = ResNet50_Weights.IMAGENET1K_V2
     preprocess = weights.transforms()
     classifier = resnet50(pretrained=False)
-    classifier.load_state_dict(torch.load('/home/abghamtm/work/masking_comparison/checkpoint/classifier/resnet50/weights_epoch30.pth'))
+    classifier.load_state_dict(torch.load('/local/altamabp/checkpoint/classifier/weights_epoch100_fullTrain.pth'))
     classifier.to(device)
     classifier.eval()
 
@@ -203,7 +204,7 @@ def main(args):
                 if x%5 ==0:
                     utils.save_image(
                         torch.cat([vqvae_out, vqvae_masked_out, distil_out], 0).to(device),
-                        f"image/recons/random/80x80_random_{vqvae_img_label.item()}_{rand_mask_img_label.item()}_{int(perc*100)}_{str(x).zfill(5)}.png",
+                        f"image_correct/recons/random/80x80_random_{vqvae_img_label.item()}_{rand_mask_img_label.item()}_{int(perc*100)}_{str(x).zfill(5)}.png",
                         nrow=3,
                         normalize=True,
                         range=(-1, 1),

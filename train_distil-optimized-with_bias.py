@@ -40,7 +40,7 @@ run = neptune.init_run(
     capture_stdout=False,
     capture_stderr=False,
     #with_id="distil",
-    source_files=["train_distil.py"]
+    source_files=["train_distil-optimized-with_bias.py"]
 )
 
 
