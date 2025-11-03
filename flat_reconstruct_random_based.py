@@ -54,7 +54,7 @@ def random_mask(unmasked, indices_unmasked,n_sample, n_token, mask_perc):
     indices_masked = indices_unmasked.clone()
     #indices_masked[~mask[0]] = -100 # Assuming -100 is the mask label token
    
-    return masked, indices_masked, mask[0][0]
+    return masked, indices_masked, mask#[0][0]
 
 def confidence_based_mask(logits,
                                  unmasked, indices_unmasked, n_token,
@@ -171,199 +171,321 @@ def attach_bias_mask_feat(labels, masked_quantizes, mask, mask_perc,num_classes=
    
     return masked_exp_mask_feat_quantizes
 
+
 def main(args):
-    #torch.cuda.set_device(2)
-    #torch.cuda.empty_cache()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    args.distributed = dist.get_world_size() > 1
-    
-    labels= np.load('./checkpoint/vqvae/test_labels.npy')
+    pass
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--n_gpu", type=int, default=1)
+
+port = (
+    2 ** 15
+    + 2 ** 14
+    + hash(os.getuid() if sys.platform != "win32" else 1) % 2 ** 14
+)
+parser.add_argument("--dist_url", default=f"tcp://127.0.0.1:{port}")
+parser.add_argument('--ckpt_vqvae', type=str, default="./checkpoint/vqvae/model_epoch100_flat_vqvae80x80_64x400codebook.pth")
+parser.add_argument('--ckpt_distil', type=str, default="./checkpoint/distil/80x80_100_UTKFace_flat_144x400codebook_50mask_epoch100_without-ignore-index.pt")
+parser.add_argument('--ckpt_resnet50', type=str, default="./checkpoint/classifier/weights_epoch100_fullTrain.pth")
+
+args = parser.parse_args()
+dist.launch(main, args.n_gpu, 1, 0, args.dist_url, args=(args,))
+
+#def main(args):
+#torch.cuda.set_device(2)
+#torch.cuda.empty_cache()
+device = "cuda" if torch.cuda.is_available() else "cpu"
+args.distributed = dist.get_world_size() > 1
+
+labels= np.load('./checkpoint/vqvae/test_labels.npy')
  
 
-    indices = np.load('./checkpoint/vqvae/test_latent_space_vqvae_80x80_codebook_64x456.npy')
-    n, h, w = indices.shape
-    indices = indices.reshape(n, h * w)
+indices = np.load('./checkpoint/vqvae/test_latent_space_vqvae_80x80_codebook_64x456.npy')
+n, h, w = indices.shape
+indices = indices.reshape(n, h * w)
 
-    quantizes = np.load('./checkpoint/vqvae/test_codebook_vqvae_80x80_codebook_64x456.npy')
-    quant_b = quantizes
-    n, c, h, w = quantizes.shape
-    quantizes = quantizes.transpose(0, 2, 3, 1)
-    quantizes = quantizes.reshape(n, h * w, c)
+quantizes = np.load('./checkpoint/vqvae/test_codebook_vqvae_80x80_codebook_64x456.npy')
+quant_b = quantizes
+n, c, h, w = quantizes.shape
+quantizes = quantizes.transpose(0, 2, 3, 1)
+quantizes = quantizes.reshape(n, h * w, c)
 
-    #Bottom data and parameters
-    n_sample = quantizes.shape[0]
-    d_embed_vec = quantizes.shape[2]
-    n_token = np.prod(quantizes.shape[1])
-    quantizes = quantizes.reshape((n_sample, n_token, d_embed_vec))
-    length = int(math.sqrt(n_token))
-    indices = indices.reshape((n_sample, n_token))
-    indices_to_sort = set(indices.flatten())
-    indices_to_sort = sorted(indices_to_sort)
-    vocab_size = indices_to_sort[-1] + 1
-    
-
-    
-    
+#Bottom data and parameters
+n_sample = quantizes.shape[0]
+d_embed_vec = quantizes.shape[2]
+n_token = np.prod(quantizes.shape[1])
+quantizes = quantizes.reshape((n_sample, n_token, d_embed_vec))
+length = int(math.sqrt(n_token))
+indices = indices.reshape((n_sample, n_token))
+indices_to_sort = set(indices.flatten())
+indices_to_sort = sorted(indices_to_sort)
+vocab_size = indices_to_sort[-1] + 1
 
 
-    #Define Distilbert model
-    cfg = DistilBertConfig(
-            vocab_size=vocab_size,
-            hidden_size=d_embed_vec+11,
-            sinusoidal_pos_embds=False,
-            n_layers=6,
-            n_heads=5,
-            max_position_embeddings=n_token
-    )
-    model_distil = DistilBertForMaskedLM(cfg).to(device)
-    model_distil.load_state_dict(torch.load(args.ckpt_distil,map_location=torch.device('cpu')))
-    model_distil = model_distil.to(device)
-    model_distil.eval()
 
-    #Define VQVAE model
-    model_vqvae = FlatVQVAE().to(device)
-    model_vqvae.load_state_dict(torch.load(args.ckpt_vqvae, map_location=torch.device('cpu')))
-    model_vqvae = model_vqvae.to(device)
-    model_vqvae.eval()
 
-    # Define classifier and load saved model(weights)
+
+
+#Define Distilbert model
+cfg = DistilBertConfig(
+        vocab_size=vocab_size,
+        hidden_size=d_embed_vec+11,
+        sinusoidal_pos_embds=False,
+        n_layers=6,
+        n_heads=5,
+        max_position_embeddings=n_token
+)
+model_distil = DistilBertForMaskedLM(cfg).to(device)
+model_distil.load_state_dict(torch.load(args.ckpt_distil,map_location=torch.device('cpu')))
+model_distil = model_distil.to(device)
+model_distil.eval()
+
+#Define VQVAE model
+model_vqvae = FlatVQVAE().to(device)
+model_vqvae.load_state_dict(torch.load(args.ckpt_vqvae, map_location=torch.device('cpu')))
+model_vqvae = model_vqvae.to(device)
+model_vqvae.eval()
+
+# Define classifier and load saved model(weights)
 # =============================================================================
 #     weights = ResNet50_Weights.IMAGENET1K_V2
 #     preprocess = weights.transforms()
 #     classifier = resnet50(pretrained=False)
 # =============================================================================
 
-    classifier = resnet50(weights=None)
+classifier = resnet50(weights=None)
 
-    classifier.fc = nn.Linear(classifier.fc.in_features, 10)  
-    classifier.load_state_dict(torch.load(args.ckpt_resnet50, map_location=torch.device('cpu')))
-    classifier.to(device)
-    classifier.eval()
-    classifier.weights = ResNet50_Weights.DEFAULT
-    preprocess = classifier.weights.transforms()
+classifier.fc = nn.Linear(classifier.fc.in_features, 10)  
+classifier.load_state_dict(torch.load(args.ckpt_resnet50, map_location=torch.device('cpu')))
+classifier.to(device)
+classifier.eval()
+classifier.weights = ResNet50_Weights.DEFAULT
+preprocess = classifier.weights.transforms()
 
-    mask_percentages = np.arange(0.1, 1.1, 0.1)
-    mask_percentages = np.append(mask_percentages,[.85,.95])
-    mask_percentages = np.sort(mask_percentages)
 
-    average_errors = []
 
-    for perc in mask_percentages:
-        reconstruction_errors = []
-        cross_entropy_class_err = []
+preprocess = transforms.Compose(
+     [
+         transforms.Resize((80,80)),
+         transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+     ]
+ )
 
-        criterion = nn.MSELoss()
-        criterion_class = nn.CrossEntropyLoss()
-        correct_random_pred = 0
-        tot_sample = 0
-        for x in range(0,quantizes.shape[0]):
-            if x%5000 ==0:
-                print(x)
-                q = torch.from_numpy(quantizes[x])
-                index = torch.from_numpy(indices[x])
-                index = index.to(device)
-                q = q.to(device)
-                q = torch.reshape(q, (1, q.size(dim=0), q.size(dim=1)))
-                
-                with torch.no_grad():
-                    q_masked, index_masked, mask = random_mask(q, index , n_sample, n_token,perc)                                
-                    q_masked = q_masked.to(device)
-                    index_masked = index_masked.to(device)
-                    
-                    masked_exp_mask_feat_train_quantizes = attach_bias_mask_feat (labels[x], q_masked, mask, perc)
+mask_percentages = np.arange(0.1, 1.1, 0.1)
+mask_percentages = np.append(mask_percentages,[.85,.95])
+mask_percentages = np.sort(mask_percentages)
+
+average_errors = []
+mask_percentages=0.5
+perc=0.5
+#for perc in mask_percentages:
+reconstruction_errors = []
+cross_entropy_class_err = []
+
+criterion = nn.MSELoss()
+criterion_class = nn.CrossEntropyLoss()
+correct_random_pred = 0
+tot_sample = 0
+#for x in range(1,quantizes.shape[0], 5000):
+    #if x%5000 ==0:
+x=0
+#print(x)
+q = torch.from_numpy(quantizes[x])
+index = torch.from_numpy(indices[x])
+index = index.to(device)
+q = q.to(device)
+q = torch.reshape(q, (1, q.size(dim=0), q.size(dim=1)))
+
+with torch.no_grad():
+    q_masked, index_masked, mask = random_mask(q, index , n_sample, n_token,perc)                                
+    q_masked = q_masked.to(device)
+    index_masked = index_masked.to(device)
     
-                #Fill in predicted tokens
-                with torch.no_grad():
-                    outputs = model_distil(inputs_embeds = masked_exp_mask_feat_train_quantizes, output_hidden_states = True)
-                    confidence_based_prediction = torch.argmax(outputs.logits, dim=2)
-                    confidence_based_recons_index = index
-                    print(mask.shape)
-                    for p in range(0,n_token):
-                        if(mask):#[p]):
-                            #confidence_based_recons_index[p] = confidence_based_prediction.detach().cpu().numpy()[0][p] 
-                            confidence_based_recons_index[p] =  confidence_based_prediction[0][p]
-                    #Reconstruct with distil predictions
-                    confidence_based_recons_index = confidence_based_recons_index.to(device)
-                    distil_out = model_vqvae.decode_code(torch.reshape(confidence_based_recons_index, (1,length,length)).to(device))
+    masked_exp_mask_feat_train_quantizes = attach_bias_mask_feat (labels[x], q_masked, mask, perc)
+
+    outputs = model_distil(inputs_embeds = masked_exp_mask_feat_train_quantizes, output_hidden_states = True)
+    confidence_based_prediction = torch.argmax(outputs.logits, dim=2)
+    confidence_based_recons_index = index
+    #print('mask: ', mask)
     
-                    #Reconstruct Original
-                    vqvae_out = model_vqvae.decode(torch.from_numpy(quant_b[x]).to(device)) #torch.reshape(torch.from_numpy(indices[x]), (1,length,length)).to(device)
-                    index_masked_forvis = index.clone()
-                    index_masked_forvis[mask]=0
-                    vqvae_masked_out = model_vqvae.decode_code(torch.reshape(index_masked_forvis, (1,length,length)).to(device))
+    # mask: (1, 400) -> (400,), boolean
+    m = np.squeeze(mask, axis=0).astype(bool)   # or: m = mask[0].astype(bool)
     
-                    # Label outputs
-                    vqvae_out = vqvae_out.unsqueeze(0)
-                    vqvae_img = preprocess(vqvae_out)
-                    vqvae_img = vqvae_img.to(device)
-                    vqvae_img_prob = classifier(vqvae_img)
-                    _, vqvae_img_label = torch.max(vqvae_img_prob, 1)
-                    
-                    rand_mask_img = preprocess(distil_out)
-                    rand_mask_img = rand_mask_img.to(device)
-                    rand_mask_img_prob = classifier(rand_mask_img)
-                    _, rand_mask_img_label = torch.max(rand_mask_img_prob, 1)
-                    correct_random_pred += (rand_mask_img_label == vqvae_img_label).sum().item()
-                    print(f'rand_mask_img_label is {rand_mask_img_label}')
-                    print(f'vqvae_img_label is {vqvae_img_label}')
-                    print(f'rand_mask_img_label is {rand_mask_img_label.item()}')
-                    print(f'vqvae_img_label is {vqvae_img_label.item()}')
-                    print(f'correct_random_pred is {correct_random_pred}')
-                    tot_sample += 1
-                    print(tot_sample)
+    # replace where mask is True
+    confidence_based_recons_index[m] = confidence_based_prediction[0][m]
     
+    #Reconstruct with distil predictions
+    confidence_based_recons_index = confidence_based_recons_index.to(device)
+    distil_out = model_vqvae.decode_code(torch.reshape(confidence_based_recons_index, (1,length,length)).to(device))
+
+    #Reconstruct Original
+    vqvae_out = model_vqvae.decode(torch.from_numpy(quant_b[x]).to(device)) #torch.reshape(torch.from_numpy(indices[x]), (1,length,length)).to(device)
+    index_masked_forvis = index.clone()
+    index_masked_forvis[mask[0]]=0
+    vqvae_masked_out = model_vqvae.decode_code(torch.reshape(index_masked_forvis, (1,length,length)).to(device))
+
+    # Label outputs
+    vqvae_out = vqvae_out.unsqueeze(0)
+    vqvae_img = preprocess(vqvae_out)
+    vqvae_img = vqvae_img.to(device)
+    vqvae_img_prob = classifier(vqvae_img)
+    _, vqvae_img_label = torch.max(vqvae_img_prob, 1)
     
-                    #if x%1000 ==0:
-                    utils.save_image(
-                        torch.cat([vqvae_out, vqvae_masked_out, distil_out], 0).to(device),
-                        f"./image_correct/vqvae_reconstruction/random/80x80_random_{vqvae_img_label.item()}_{rand_mask_img_label.item()}_{int(perc*100)}_{str(x).zfill(5)}.png",
-                        nrow=3,
-                        normalize=True,
-                        value_range=(-1, 1),
-                    )
-                
-                recon_loss = criterion(distil_out, vqvae_out)
-                #run["recons/mse_per_image_random_mask"].log(recon_loss.item())
-                reconstruction_errors.append(recon_loss.item())
-                class_loss = criterion_class(rand_mask_img_prob, vqvae_img_prob)
-                #run["recons/cross_entropy_per_image_random_mask"].log(class_loss.item())
-                cross_entropy_class_err.append(class_loss.item())
-        
-        #run["recons/average_mse_per_precision_random_mask"].log(np.mean(reconstruction_errors))
-        #run["recons/average_cross_entropy_error_random_mask"].log(np.mean(cross_entropy_class_err))
-        average_errors.append(np.mean(reconstruction_errors))
-        pred_acc_random_mask = correct_random_pred/tot_sample
-        pred_err_random_mask = 1-pred_acc_random_mask
-        #run["recons/average_classification_accuracy_random"].log(pred_err_random_mask)
+    rand_mask_img = preprocess(distil_out)
+    rand_mask_img = rand_mask_img.to(device)
+    rand_mask_img_prob = classifier(rand_mask_img)
+    _, rand_mask_img_label = torch.max(rand_mask_img_prob, 1)
+    correct_random_pred += (rand_mask_img_label == vqvae_img_label).sum().item()
+    print(f'rand_mask_img_label is {rand_mask_img_label}')
+    print(f'vqvae_img_label is {vqvae_img_label}')
+    #print(f'rand_mask_img_label is {rand_mask_img_label.item()}')
+    #print(f'vqvae_img_label is {vqvae_img_label.item()}')
+    print(f'correct_random_pred is {correct_random_pred}')
+    tot_sample += 1
+    print(tot_sample)
 
 
-    # Plotting the reconstruction errors
-    plt.plot(mask_percentages * 100, average_errors, marker='o')
-    plt.xlabel('Mask Percentage')
-    plt.ylabel('Average Reconstruction Error (MSE)')
-    plt.title('Reconstruction Error for Random Mask vs Mask Percentage')
-    plt.grid(True)
-    plot_path = './image_correct/distil_reconstruction/random_error_vs_precision.png'
-    plt.savefig(plot_path)
-    plt.close()
-    #run['random_error_vs_percentage'].upload(plot_path)
-
-batchsize_modified=1
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--n_gpu", type=int, default=1)
-
-    port = (
-        2 ** 15
-        + 2 ** 14
-        + hash(os.getuid() if sys.platform != "win32" else 1) % 2 ** 14
+    #if x%1000 ==0:
+    utils.save_image(
+        torch.cat([vqvae_out, vqvae_masked_out, distil_out], 0).to(device),
+        f"./image_correct/vqvae_reconstruction/random/80x80_random_{vqvae_img_label.item()}_{rand_mask_img_label.item()}_{int(perc*100)}_{str(x).zfill(5)}.png",
+        nrow=3,
+        normalize=True,
+        value_range=(-1, 1),
     )
-    parser.add_argument("--dist_url", default=f"tcp://127.0.0.1:{port}")
-    parser.add_argument('--ckpt_vqvae', type=str, default="./checkpoint/vqvae/model_epoch100_flat_vqvae80x80_64x400codebook.pth")
-    parser.add_argument('--ckpt_distil', type=str, default="./checkpoint/distil/80x80_100_UTKFace_flat_144x400codebook_50mask_epoch100_without-ignore-index.pt")
-    parser.add_argument('--ckpt_resnet50', type=str, default="./checkpoint/classifier/weights_epoch100_fullTrain.pth")
 
-    args = parser.parse_args()
-    dist.launch(main, args.n_gpu, 1, 0, args.dist_url, args=(args,))
+recon_loss = criterion(distil_out, vqvae_out)
+#run["recons/mse_per_image_random_mask"].log(recon_loss.item())
+reconstruction_errors.append(recon_loss.item())
+class_loss = criterion_class(rand_mask_img_prob, vqvae_img_prob)
+#run["recons/cross_entropy_per_image_random_mask"].log(class_loss.item())
+cross_entropy_class_err.append(class_loss.item())
+
+#run["recons/average_mse_per_precision_random_mask"].log(np.mean(reconstruction_errors))
+#run["recons/average_cross_entropy_error_random_mask"].log(np.mean(cross_entropy_class_err))
+average_errors.append(np.mean(reconstruction_errors))
+pred_acc_random_mask = correct_random_pred/tot_sample
+pred_err_random_mask = 1-pred_acc_random_mask
+#run["recons/average_classification_accuracy_random"].log(pred_err_random_mask)
+
+
+# Plotting the reconstruction errors
+plt.plot(mask_percentages * 100, average_errors, marker='o')
+plt.xlabel('Mask Percentage')
+plt.ylabel('Average Reconstruction Error (MSE)')
+plt.title('Reconstruction Error for Random Mask vs Mask Percentage')
+plt.grid(True)
+plot_path = './image_correct/distil_reconstruction/random_error_vs_precision.png'
+plt.savefig(plot_path)
+plt.show()#close()
+
+
+# =============================================================================
+# for perc in mask_percentages:
+#     reconstruction_errors = []
+#     cross_entropy_class_err = []
+# 
+#     criterion = nn.MSELoss()
+#     criterion_class = nn.CrossEntropyLoss()
+#     correct_random_pred = 0
+#     tot_sample = 0
+#     for x in range(0,quantizes.shape[0], 5000):
+#         #if x%5000 ==0:
+#             print(x)
+#             q = torch.from_numpy(quantizes[x])
+#             index = torch.from_numpy(indices[x])
+#             index = index.to(device)
+#             q = q.to(device)
+#             q = torch.reshape(q, (1, q.size(dim=0), q.size(dim=1)))
+#             
+#             with torch.no_grad():
+#                 q_masked, index_masked, mask = random_mask(q, index , n_sample, n_token,perc)                                
+#                 q_masked = q_masked.to(device)
+#                 index_masked = index_masked.to(device)
+#                 
+#                 masked_exp_mask_feat_train_quantizes = attach_bias_mask_feat (labels[x], q_masked, mask, perc)
+# 
+#             #Fill in predicted tokens
+#             with torch.no_grad():
+#                 outputs = model_distil(inputs_embeds = masked_exp_mask_feat_train_quantizes, output_hidden_states = True)
+#                 confidence_based_prediction = torch.argmax(outputs.logits, dim=2)
+#                 confidence_based_recons_index = index
+#                 print('mask: ', mask)
+#                 
+#                 confidence_based_recons_index=confidence_based_prediction
+# # =============================================================================
+# #                     for p in range(0,n_token):
+# #                         if(mask):#[p]):
+# #                             #confidence_based_recons_index[p] = confidence_based_prediction.detach().cpu().numpy()[0][p] 
+# #                             confidence_based_recons_index[p] =  confidence_based_prediction[0][p]
+# # =============================================================================
+#                 #Reconstruct with distil predictions
+#                 confidence_based_recons_index = confidence_based_recons_index.to(device)
+#                 distil_out = model_vqvae.decode_code(torch.reshape(confidence_based_recons_index, (1,length,length)).to(device))
+# 
+#                 #Reconstruct Original
+#                 vqvae_out = model_vqvae.decode(torch.from_numpy(quant_b[x]).to(device)) #torch.reshape(torch.from_numpy(indices[x]), (1,length,length)).to(device)
+#                 index_masked_forvis = index.clone()
+#                 index_masked_forvis[mask]=0
+#                 vqvae_masked_out = model_vqvae.decode_code(torch.reshape(index_masked_forvis, (1,length,length)).to(device))
+# 
+#                 # Label outputs
+#                 vqvae_out = vqvae_out.unsqueeze(0)
+#                 vqvae_img = preprocess(vqvae_out)
+#                 vqvae_img = vqvae_img.to(device)
+#                 vqvae_img_prob = classifier(vqvae_img)
+#                 _, vqvae_img_label = torch.max(vqvae_img_prob, 1)
+#                 
+#                 rand_mask_img = preprocess(distil_out)
+#                 rand_mask_img = rand_mask_img.to(device)
+#                 rand_mask_img_prob = classifier(rand_mask_img)
+#                 _, rand_mask_img_label = torch.max(rand_mask_img_prob, 1)
+#                 correct_random_pred += (rand_mask_img_label == vqvae_img_label).sum().item()
+#                 print(f'rand_mask_img_label is {rand_mask_img_label}')
+#                 print(f'vqvae_img_label is {vqvae_img_label}')
+#                 #print(f'rand_mask_img_label is {rand_mask_img_label.item()}')
+#                 #print(f'vqvae_img_label is {vqvae_img_label.item()}')
+#                 print(f'correct_random_pred is {correct_random_pred}')
+#                 tot_sample += 1
+#                 print(tot_sample)
+# 
+# 
+#                 #if x%1000 ==0:
+#                 utils.save_image(
+#                     torch.cat([vqvae_out, vqvae_masked_out, distil_out], 0).to(device),
+#                     f"./image_correct/vqvae_reconstruction/random/80x80_random_{vqvae_img_label.item()}_{rand_mask_img_label.item()}_{int(perc*100)}_{str(x).zfill(5)}.png",
+#                     nrow=3,
+#                     normalize=True,
+#                     value_range=(-1, 1),
+#                 )
+#             
+#             recon_loss = criterion(distil_out, vqvae_out)
+#             #run["recons/mse_per_image_random_mask"].log(recon_loss.item())
+#             reconstruction_errors.append(recon_loss.item())
+#             class_loss = criterion_class(rand_mask_img_prob, vqvae_img_prob)
+#             #run["recons/cross_entropy_per_image_random_mask"].log(class_loss.item())
+#             cross_entropy_class_err.append(class_loss.item())
+#     
+#     #run["recons/average_mse_per_precision_random_mask"].log(np.mean(reconstruction_errors))
+#     #run["recons/average_cross_entropy_error_random_mask"].log(np.mean(cross_entropy_class_err))
+#     average_errors.append(np.mean(reconstruction_errors))
+#     pred_acc_random_mask = correct_random_pred/tot_sample
+#     pred_err_random_mask = 1-pred_acc_random_mask
+#     #run["recons/average_classification_accuracy_random"].log(pred_err_random_mask)
+# 
+# 
+# # Plotting the reconstruction errors
+# plt.plot(mask_percentages * 100, average_errors, marker='o')
+# plt.xlabel('Mask Percentage')
+# plt.ylabel('Average Reconstruction Error (MSE)')
+# plt.title('Reconstruction Error for Random Mask vs Mask Percentage')
+# plt.grid(True)
+# plot_path = './image_correct/distil_reconstruction/random_error_vs_precision.png'
+# plt.savefig(plot_path)
+# plt.show()#close()
+# =============================================================================
+#run['random_error_vs_percentage'].upload(plot_path)
+
+#if __name__ == "__main__":
 
 

@@ -3,12 +3,26 @@ import torch.nn as nn
 from torchvision.models import resnet50, ResNet50_Weights
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Dataset, Subset
-from sklearn.model_selection import train_test_split
+#from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 import torch.optim as optim
 import numpy as np
 from vqvae import FlatVQVAE
 import distributed as dist
+import math
+import neptune.new as neptune
+
+
+run = neptune.init_run(
+    project="UTKFaces",
+    api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiIwMmExYTliOC1mYjkyLTQ4M2YtYjFiYS1iZWQ1Y2E0OTJlNTkifQ==",
+    capture_stdout=False,
+    capture_stderr=False,
+    #with_id="distil",
+    source_files=["train_classifier.py"]
+)
+
+
 
 # Check GPU availability
 print(torch.cuda.is_available())
@@ -38,53 +52,67 @@ def decode_quantizes(model, quantizes):
         images = model.decode(quantizes)
     return images
 
-ckpt_vqvae = "/home/abghamtm/work/masking_comparison/checkpoint/vqvae/model_epoch80_flat_vqvae80x80_144x456codebook.pth"
+ckpt_vqvae = "./checkpoint_correct/vqvae/model_epoch100_flat_vqvae80x80_64x400codebook.pth"
 torch.cuda.set_device(1) 
 torch.cuda.empty_cache()
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-quantizes = np.load('/home/abghamtm/work/masking_comparison/checkpoint/vqvae/quantized_epoch80_flat_vqvae80x80_144x456codebook.npy')
-labels = np.load('/home/abghamtm/work/masking_comparison/checkpoint/vqvae/labels_epoch80_flat_vqvae80x80_144x456codebook.npy')
-labels = torch.from_numpy(labels)
+
+#### validation set###
+
+val_labels= np.load('./checkpoint_correct/vqvae/val_labels.npy')
+val_labels = torch.from_numpy(val_labels)
+
+val_quantizes = np.load('./checkpoint_correct/vqvae/val_codebook_vqvae_80x80_codebook_64x456.npy')
+
+
+#### train set###
+
+train_labels = np.load('./checkpoint_correct/vqvae/train_labels.npy')
+train_labels = torch.from_numpy(train_labels)
+
+train_quantizes = np.load('./checkpoint_correct/vqvae/train_codebook_vqvae_80x80_codebook_64x456.npy')
+
 
 model_vqvae = FlatVQVAE().to(device)
 model_vqvae.load_state_dict(torch.load(ckpt_vqvae, map_location=device))
 model_vqvae = model_vqvae.to(device)
 model_vqvae.eval()
-reconstructed_images = decode_quantizes(model_vqvae, quantizes)
+reconstructed_images_train = decode_quantizes(model_vqvae, train_quantizes)
+reconstructed_images_val = decode_quantizes(model_vqvae, val_quantizes)
 
-dataset = ReconstructedDataset(reconstructed_images, labels)
 
-# Split the indices in a stratified manner
-train_indices, test_indices = train_test_split(
-    np.arange(len(labels)),
-    test_size=0.2,
-    stratify=labels,
-    random_state=42
-)
-# Create subsets of the dataset
-train_dataset = Subset(dataset, train_indices)
-test_dataset = Subset(dataset, test_indices)
+train_dataset = ReconstructedDataset(reconstructed_images_train, train_labels)
+val_dataset=  ReconstructedDataset(reconstructed_images_val, val_labels)
 
-batchsize_modified=1
+
+
+batchsize_modified=16
 train_loader = DataLoader(train_dataset, batch_size=batchsize_modified, shuffle=True, num_workers=0)#256
-for inputs, labels in train_loader:
-    print(inputs.shape, labels.shape)
-    break
+val_loader = DataLoader(val_dataset, batch_size=batchsize_modified, shuffle=True, num_workers=0)
 
-test_loader = DataLoader(test_dataset, batch_size=batchsize_modified, shuffle=True, num_workers=0)
+transform = transforms.Compose(
+    [
+        transforms.Resize((80,80)),
+        transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+    ]
+)
 
-weights = ResNet50_Weights.IMAGENET1K_V2
-preprocess = weights.transforms()
-model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
+
+model = resnet50(weights=None)
+model.fc = nn.Linear(model.fc.in_features, 10)  
 model.to(device)
+
+nn.init.normal_(model.fc.weight)#, mean=0.0, std=0.01)
+nn.init.zeros_(model.fc.bias)
+
 
 # Define loss function and optimizer
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
 # Training loop
-num_epochs = 30  # Adjust as needed
+num_epochs = 50  # Adjust as needed
 
 for epoch in range(num_epochs):
     model.train()
@@ -92,7 +120,7 @@ for epoch in range(num_epochs):
     correct = 0
     total = 0
     for inputs, labels in tqdm(train_loader):
-        inputs = preprocess(inputs)
+        inputs = transform(inputs)
         inputs, labels = inputs.to(device), labels.to(device)
 
         # Zero the parameter gradients
@@ -116,17 +144,18 @@ for epoch in range(num_epochs):
     # Calculate average loss and accuracy
     epoch_loss = running_loss / len(train_loader)
     epoch_accuracy = 100 * correct / total
+    run["train/classifier-loss"].log(epoch_loss.item())
 
     print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_accuracy:.2f}%")
-    torch.save(model.state_dict(), f"/home/abghamtm/work/masking_comparison/checkpoint/classifier/resnet50/weights_epoch{str(epoch + 1).zfill(2)}.pth")
+    torch.save(model.state_dict(), f"/local/altamabp/checkpoint_correct/classifier/weights_epoch{str(epoch + 1).zfill(2)}.pth")
 
 # Define classifier and load saved model(weights)
 classifier = resnet50(pretrained=False)
-models_list = os.listdir("/home/abghamtm/work/masking_comparison/checkpoint/classifier/resnet50/")
+models_list = os.listdir("/local/altamabp/checkpoint_correct/classifier")
 models_list.sort()
 for model_name in models_list:
     print(model_name)
-    classifier.load_state_dict(torch.load(os.path.join("/home/abghamtm/work/masking_comparison/checkpoint/classifier/resnet50/",model_name)))
+    classifier.load_state_dict(torch.load(os.path.join("/local/altamabp/checkpoint_correct/classifier/",model_name)))
     classifier.to(device)
     classifier.eval()  # Set model to evaluation mode
     correct = 0
@@ -134,8 +163,8 @@ for model_name in models_list:
     total_loss = 0
 
     with torch.no_grad():
-        for inputs, labels in tqdm(test_loader):
-            inputs = preprocess(inputs)
+        for inputs, labels in tqdm(val_loader):
+            inputs = transform(inputs)
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = classifier(inputs)
             _, predicted = torch.max(outputs, 1)
@@ -143,7 +172,8 @@ for model_name in models_list:
             correct += (predicted == labels).sum().item()
             loss = criterion(outputs, labels)
             total_loss += loss.item()
-
+    
+    run["val/classifier-loss"].log(total_loss.item())
     accuracy = correct / total
     print(f'Accuracy: {accuracy * 100:.2f}%')
     print(f'loss: {total_loss:.2f}%')
