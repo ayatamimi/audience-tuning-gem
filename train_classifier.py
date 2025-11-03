@@ -45,12 +45,71 @@ class ReconstructedDataset(Dataset):
         image = self.images[idx]
         label = self.labels[idx]
         return image, label
+    
+#pure CPU fallback (slow but safe)
+# =============================================================================
+# def decode_quantizes(model, quantizes):
+#     quantizes = torch.tensor(quantizes).float().to(device)
+#     with torch.no_grad():
+#         images = model.decode(quantizes)
+#     return images
+# 
+# =============================================================================
 
-def decode_quantizes(model, quantizes):
-    quantizes = torch.tensor(quantizes).float().to(device)
+import torch
+
+def decode_quantizes(model, quantizes, device="cuda:0", batch_size=16, use_autocast=True):
+    """
+    Decode large `quantizes` without CUDA OOM by streaming mini-batches to the GPU.
+
+    Args:
+        model: VQ-VAE (or similar) with .decode() method
+        quantizes: numpy array or torch.Tensor, shape [N, ...]
+        device: "cuda:0", "cuda:1", or "cpu"
+        batch_size: per-GPU batch size to fit in memory
+        use_autocast: use mixed precision on CUDA to cut memory
+
+    Returns:
+        images: torch.Tensor on CPU, concatenated over all batches
+    """
+    model.eval()
+    # Keep source on CPU; only slice-batches go to GPU
+    q_cpu = torch.as_tensor(quantizes, device="cpu", dtype=torch.float32)
+    # Pin for faster H2D copies (no effect if already CUDA/CPU not pinned)
+    if q_cpu.device.type == "cpu":
+        try:
+            q_cpu = q_cpu.pin_memory()
+        except RuntimeError:
+            pass  # pinning may fail on some platforms
+
+    outs = []
+    N = q_cpu.shape[0]
+
+    # Choose autocast only for CUDA
+    use_amp = use_autocast and ("cuda" in str(device) and torch.cuda.is_available())
+
     with torch.no_grad():
-        images = model.decode(quantizes)
-    return images
+        for i in range(0, N, batch_size):
+            q = q_cpu[i:i+batch_size]
+            q = q.to(device, non_blocking=True)
+
+            if use_amp:
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    out = model.decode(q)
+            else:
+                out = model.decode(q)
+
+            # move each batch result back to CPU to free VRAM
+            outs.append(out.float().cpu())
+
+            # clean up per-batch GPU tensors
+            del q, out
+            if "cuda" in str(device):
+                torch.cuda.empty_cache()
+
+    return torch.cat(outs, dim=0)
+
+
 
 ckpt_vqvae = "./checkpoint_correct/vqvae/model_epoch100_flat_vqvae80x80_64x400codebook.pth"
 torch.cuda.set_device(1) 
@@ -78,8 +137,8 @@ model_vqvae = FlatVQVAE().to(device)
 model_vqvae.load_state_dict(torch.load(ckpt_vqvae, map_location=device))
 model_vqvae = model_vqvae.to(device)
 model_vqvae.eval()
-reconstructed_images_train = decode_quantizes(model_vqvae, train_quantizes)
-reconstructed_images_val = decode_quantizes(model_vqvae, val_quantizes)
+reconstructed_images_train = decode_quantizes(model_vqvae, train_quantizes, device="cuda:1", batch_size=16)
+reconstructed_images_val = decode_quantizes(model_vqvae, val_quantizes, device="cuda:1", batch_size=16)
 
 
 train_dataset = ReconstructedDataset(reconstructed_images_train, train_labels)
