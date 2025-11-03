@@ -170,7 +170,7 @@ def main(args):
 
     #### validation set###
     
-    val_labels= train_labels = np.load('/local/altamabp/checkpoint_correct/vqvae/val_labels.npy')
+    val_labels= np.load('/local/altamabp/checkpoint_correct/vqvae/val_labels.npy')
     
     val_indices = np.load('/local/altamabp/checkpoint_correct/vqvae/val_latent_space_vqvae_80x80_codebook_64x456.npy')
     n, h, w = val_indices.shape

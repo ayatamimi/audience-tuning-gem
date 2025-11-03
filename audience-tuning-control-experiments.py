@@ -1,9 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Sat Nov  1 19:06:15 2025
-
-@author: ayata
-"""
 import numpy as np
 import matplotlib.pyplot as plt
 import argparse
@@ -61,6 +56,18 @@ def attach_bias_mask_feat(labels, masked_quantizes, mask, mask_perc):
    
     return masked_exp_mask_feat_quantizes
 
+
+def random_mask(unmasked, indices_unmasked,n_sample, n_token, mask_perc):
+    
+    mask = np.random.default_rng().choice([True, False], size=(1, n_token), p=[mask_perc, 1 - mask_perc])
+    masked = unmasked.clone()
+    masked[mask] = 0  # Assuming 0 is the mask token
+    indices_masked = indices_unmasked.clone()
+    #indices_masked[~mask[0]] = -100 # Assuming -100 is the mask label token
+   
+    return masked, indices_masked, mask[0][0]
+
+
 def main(args):
     torch.cuda.set_device(2)
     torch.cuda.empty_cache()
@@ -98,7 +105,7 @@ def main(args):
             max_position_embeddings=n_token
     )
     model_distil = DistilBertForMaskedLM(cfg).to(device)
-    model_distil.load_state_dict(torch.load(args.ckpt_distil_combined))
+    model_distil.load_state_dict(torch.load(args.ckpt_distil))
     model_distil = model_distil.to(device)
     model_distil.eval()
 
@@ -234,7 +241,7 @@ if __name__ == "__main__":
     parser.add_argument("--dist_url", default=f"tcp://127.0.0.1:{port}")
     parser.add_argument("--batch_size", type=int, default=batchsize_modified)#
     parser.add_argument('--ckpt_vqvae', type=str, default="/local/altamabp/checkpoint_correct/vqvae/model_epoch100_flat_vqvae80x80_64x400codebook.pth")
-    parser.add_argument('--ckpt_distil_combined', type=str, default="/local/altamabp/checkpoint_correct/distil/80x80_100_UTKFace_flat_144x400codebook_50mask_epoch100-.pt")
+    parser.add_argument('--ckpt_distil', type=str, default="/local/altamabp/checkpoint_correct/distil/80x80_100_UTKFace_flat_144x400codebook_50mask_epoch100-.pt")
     parser.add_argument('--ckpt_resnet50', type=str, default="/local/altamabp/checkpoint/classifier/weights_epoch100_fullTrain.pth")
     args = parser.parse_args()
     dist.launch(main, args.n_gpu, 1, 0, args.dist_url, args=(args,))
