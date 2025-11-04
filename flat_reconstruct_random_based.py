@@ -465,7 +465,7 @@ for x in range(1,quantizes.shape[0], 1000):
             
             masked_exp_mask_feat_train_quantizes = attach_bias_mask_feat (labels[x], q_masked, mask, perc)
         
-            outputs = model_distil(inputs_embeds = masked_exp_mask_feat_train_quantizes, output_hidden_states = True)
+            outputs = model_distil(inputs_embeds = masked_exp_mask_feat_train_quantizes, output_hidden_states = False)
             confidence_based_prediction = torch.argmax(outputs.logits, dim=2)
             confidence_based_recons_index = index.clone()
             #print('mask: ', mask)

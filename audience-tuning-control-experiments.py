@@ -26,34 +26,81 @@ run = neptune.init_run(
 )
 
 
-def attach_bias_mask_feat(labels, masked_quantizes, mask, mask_perc):
-    
-    idx_t = torch.as_tensor(labels, dtype=torch.long, device=masked_quantizes.device)  # (N,)
+# =============================================================================
+# def attach_bias_mask_feat(bias, masked_quantizes, mask):
+#     device = masked_quantizes.device
+#     dtype  = masked_quantizes.dtype
+#     N, T, _ = masked_quantizes.shape
+#     
+# 
+#     bias_t = torch.as_tensor(bias, device=device)
+#  
+#     # ---- Build bias features to shape (N, T, 10) ----    
+#     if bias_t.dim()==0:
+#         idx_t = torch.as_tensor(bias, dtype=torch.long, device=masked_quantizes.device)  # (N,)
+#         idx_t_exp = idx_t.unsqueeze(1).expand(N, T)                         # (N, T)
+#     
+#         one_hot_labels = torch.nn.functional.one_hot(idx_t_exp, num_classes=10).to(dtype=masked_quantizes.dtype)  # (N,T,C)
+#     
+#         masked_exp_quantizes = torch.cat([masked_quantizes, one_hot_labels], dim=2)
+#     else:
+#         masked_exp_quantizes = torch.cat([masked_quantizes, bias_t], dim=2)
+# 
+# 
+#     print('masked_exp_quantizes.shape: ',masked_exp_quantizes.shape)  # torch.Size([160000, 400, 74])
+#     # masked_exp_train_quantizes: torch.FloatTensor (N, T, 74)
+#     # mask_train: numpy bool array (N, T)  True = masked
+# 
+#     device = masked_exp_quantizes.device
+#     dtype  = masked_exp_quantizes.dtype
+#     
+#    # 1) NumPy -> Torch, cast to float (1.0 masked, 0.0 unmasked)
+#     mask_feat = torch.as_tensor(mask, device=device).to(dtype)   # (N, T)
+# 
+#     # 2) Add feature axis
+#     mask_feat = mask_feat.unsqueeze(-1)                                 # (N, T, 1)
+# 
+#     # 3) Concatenate
+#     masked_exp_mask_feat_quantizes = torch.cat([masked_exp_quantizes, mask_feat], dim=-1)  # (N, T, 75)
+#    
+#     return masked_exp_mask_feat_quantizes
+# =============================================================================
 
-    N, T, _ = masked_quantizes.shape
-    idx_t_exp = idx_t.unsqueeze(1).expand(N, T)                         # (N, T)
 
-    one_hot_labels = torch.nn.functional.one_hot(idx_t_exp, num_classes=10).to(dtype=masked_quantizes.dtype)  # (N,T,C)
+def attach_bias_mask_feat(bias, masked_quantizes, mask):
+    device = masked_quantizes.device
+    dtype  = masked_quantizes.dtype
+    N, T, _ = masked_quantizes.shape  # (N, 400, 64)
 
-    masked_exp_quantizes = torch.cat([masked_quantizes, one_hot_labels], dim=2)
+    # ---- Build bias features to shape (N, T, 10) ----
+    bias_t = torch.as_tensor(bias, device=device)
 
+    if bias_t.dim() == 0:
+        # scalar -> class id for all samples
+        idx = bias_t.long().expand(N)                 # (N,)
+        idx_exp = idx.unsqueeze(1).expand(N, T)       # (N, T)
+        bias_feat = F.one_hot(idx_exp, num_classes=10).to(dtype)  # (N, T, 10)
+    else:
+        # (10,) prob vector -> shared across all N,T
+        assert bias_t.numel() == 10, "bias vector must have length 10"
+        probs = bias_t.to(dtype).view(1, 1, 10)       # (1,1,10)
+        bias_feat = probs.expand(N, T, 10).contiguous()
 
-    print('masked_exp_quantizes.shape: ',masked_exp_quantizes.shape)  # torch.Size([160000, 400, 74])
-    # masked_exp_train_quantizes: torch.FloatTensor (N, T, 74)
-    # mask_train: numpy bool array (N, T)  True = masked
+    # Concatenate quantized vectors with bias feature along last dim
+    masked_exp_quantizes = torch.cat([masked_quantizes, bias_feat], dim=2)  # (N, T, 64+10)
 
-    device = masked_exp_quantizes.device
-    dtype  = masked_exp_quantizes.dtype
-    
-   # 1) NumPy -> Torch, cast to float (1.0 masked, 0.0 unmasked)
-    mask_feat = torch.as_tensor(mask, device=device).to(dtype)   # (N, T)
+    mask_t = torch.as_tensor(mask, device=device)        # bool or 0/1
+    mask_t = mask_t.expand(N, T)
 
-    # 2) Add feature axis
-    mask_feat = mask_feat.unsqueeze(-1)                                 # (N, T, 1)
+    # ---- Mask feature: 1.0 masked, 0.0 unmasked (broadcast to last dim=1) ----  # (N, T, 1)
+    mask_feat = mask_t.to(dtype).unsqueeze(-1)           # (N, T, 1); 1.0 masked, 0.0 unmasked
 
-    # 3) Concatenate
-    masked_exp_mask_feat_quantizes = torch.cat([masked_exp_quantizes, mask_feat], dim=-1)  # (N, T, 75)
-   
+    # Final concat: (N, T, 64 + 10 + 1) = (N, T, 75)
+    masked_exp_mask_feat_quantizes = torch.cat([masked_exp_quantizes, mask_feat], dim=-1)
+
+    # print('masked_exp_quantizes.shape:', masked_exp_quantizes.shape)
+    # print('out.shape:', out.shape)
+
     return masked_exp_mask_feat_quantizes
 
 
@@ -68,17 +115,110 @@ def random_mask(unmasked, indices_unmasked,n_sample, n_token, mask_perc):
     return masked, indices_masked, mask[0][0]
 
 
+
+############ Data prepration and masking ############
+def mask_quantizes(quantizes, mask_perc, mask_token =0):
+    n_samples = quantizes.shape[0]
+    n_tokens = quantizes.shape[1]
+    
+    mask = np.random.default_rng().choice([True, False], size=(n_samples, n_tokens), p=[mask_perc, 1 - mask_perc])
+    run["data/mask_prec"].log(mask_perc)
+
+    masked_quantizes = np.copy(quantizes)
+    masked_quantizes[mask] = mask_token
+
+    masked_quantizes = torch.from_numpy(masked_quantizes)
+        
+    return masked_quantizes, mask
+
+def recons(distil_model, quantizes, mask_perc, labels):
+    
+    
+    masked_quantizes, mask= mask_quantizes(quantizes, mask_perc)
+
+    
+    masked_quantizes_exp_bias_mask_feat = attach_bias_mask_feat (labels, masked_quantizes, mask)
+    print('masked_quantizes_exp_bias_mask_feat.shape: ',masked_quantizes_exp_bias_mask_feat.shape)
+    
+    outputs = distil_model(inputs_embeds = masked_quantizes_exp_bias_mask_feat, output_hidden_states = False)
+    logits=outputs.logits
+    confidence_based_prediction = torch.argmax(logits, dim=2)
+    
+    return confidence_based_prediction, logits, masked_quantizes, masked_quantizes_exp_bias_mask_feat
+
+
+def retrieve(vqvae_model, most_probable):
+    priors = np.reshape(most_probable, (-1,20,20))
+    zq = vqvae_model.decode_code(priors)
+    generated = vqvae_model.decode(torch.from_numpy(zq).to(device))
+    return generated 
+
+    
+def mse(img1, img2):
+    """
+    Compute Mean Squared Error between two images or batches of images.
+    Each input can be shape (3,80,80) or (N,3,80,80).
+    Returns a scalar tensor (the mean MSE).
+    """
+    # Ensure both are tensors on the same device and dtype
+    img1 = torch.as_tensor(img1)
+    img2 = torch.as_tensor(img2, device=img1.device, dtype=img1.dtype)
+
+    # If single images, add batch dimension
+    if img1.ndim == 3:
+        img1 = img1.unsqueeze(0)
+        img2 = img2.unsqueeze(0)
+
+    # Compute mean squared error
+    mse_val = F.mse_loss(img1, img2, reduction='mean')
+    return mse_val
+
+
+
 def main(args):
     torch.cuda.set_device(2)
     torch.cuda.empty_cache()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     args.distributed = dist.get_world_size() > 1
 
-    indices = np.load('/local/altamabp/test_latent_space_vqvae_80x80_codebook_64x456.npy')
+
+    #Define VQVAE model
+    model_vqvae = FlatVQVAE().to(device)
+    model_vqvae.load_state_dict(torch.load(args.ckpt_vqvae, map_location=device))
+    model_vqvae = model_vqvae.to(device)
+    model_vqvae.eval()
+
+
+    preprocess = transforms.Compose(
+        [
+            transforms.Resize((80,80)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+        ]
+    )
+
+    # dataset/loader
+    dataset = datasets.ImageFolder("./UTKFace_dataset_subset_15000_structured", transform=preprocess)
+    loader = DataLoader(dataset, batch_size=64, shuffle=False)#, num_workers=4, pin_memory=True)
+    
+    images=[]
+    quantizes=[]
+    indices=[]
+    true_labels=[]
+
+
+    for imgs, labels in loader:
+        quants, _, idxs, _, _ = model_vqvae.encode(imgs)
+        images.append(imgs)
+        quantizes.append(quants)
+        indices.append(idxs)
+        true_labels.append(labels)
+        
+        
+
     n, h, w = indices.shape
     indices = indices.reshape(n, h * w)
 
-    quantizes = np.load('/local/altamabp/test_codebook_vqvae_80x80_codebook_64x456.npy')
     quant_b = quantizes
     n, c, h, w = quantizes.shape
     quantizes = quantizes.transpose(0, 2, 3, 1)
@@ -95,10 +235,29 @@ def main(args):
     indices_to_sort = sorted(indices_to_sort)
     vocab_size = indices_to_sort[-1] + 1
 
+    n_samples = quantizes.shape[0]
+    d_embed_vec = quantizes.shape[2]
+    n_tokens = quantizes.shape[1]
+    print(f'n_samples: {n_samples}')
+    print(f'quantizes.shape: {quantizes.shape}')
+    print(f'n_tokens: {n_tokens}')
+
+
+    indices = set(indices.flatten())
+    indices = sorted(indices)
+    vocab_size = indices[-1] + 1
+    
+
+
+    labels = torch.from_numpy(labels)
+
+
+
+
     #Define Distilbert model
     cfg = DistilBertConfig(
             vocab_size=vocab_size,
-            hidden_size=d_embed_vec,
+            hidden_size=d_embed_vec+11,
             sinusoidal_pos_embds=False,
             n_layers=6,
             n_heads=5,
@@ -109,11 +268,7 @@ def main(args):
     model_distil = model_distil.to(device)
     model_distil.eval()
 
-    #Define VQVAE model
-    model_vqvae = FlatVQVAE().to(device)
-    model_vqvae.load_state_dict(torch.load(args.ckpt_vqvae, map_location=device))
-    model_vqvae = model_vqvae.to(device)
-    model_vqvae.eval()
+
 
     # Define classifier and load saved model(weights)
     classifier = resnet50(weights=None)
@@ -122,6 +277,88 @@ def main(args):
     classifier.load_state_dict(torch.load(args.ckpt_resnet50))
     classifier.to(device)
     classifier.eval()
+
+
+
+
+####-------------------------shared reality---------------------------####
+
+#get predicted indices
+S2_s, _, _, _=recons(model_distil, quantizes, 0.5, labels[:,1])
+S2_w, _, _, _=recons(model_distil, quantizes, 0.5, labels[:,0])
+
+#retrieve image from predicted indices
+M2_s=retrieve(model_vqvae, S2_s)
+M2_w=retrieve(model_vqvae, S2_w)
+
+#calculate mse between retrieved image and original input image
+mse2_s=mse(M2_s,images)
+mse2_w=mse(M2_w,images)
+#(mse between retrieved image from the strong label vs original image)
+mse2_s_all=np.zeros((n_sample))
+for i in range(n_sample):
+    mse2_s_all[i]=mse(M2_s[i], images[i])
+#(mse between retrieved image from the weak label vs original image)        
+mse2_w_all=np.zeros((n_sample))
+for i in range(n_sample):
+    mse2_w_all[i]=mse(M2_w[i], images[i])
+
+#get std of MSE
+mse2_s_std=np.std(mse2_s_all)
+mse2_w_std=np.std(mse2_w_all)
+
+#classify retrieved image
+V2_s=classifier(M2_s)
+V2_w=classifier(M2_w)
+
+#get predicted label for retrieved image
+eval2_s=np.argmax(V2_s,axis=1)
+eval2_w=np.argmax(V2_w,axis=1)
+
+#calculate the mean of misclassifications
+error2s= (eval2_s != labels[:n_sample,1]).mean()
+error2w= (eval2_w != labels[:n_sample,0]).mean()
+
+#calculate the difference of judgements between strong and weak labels (assuming that the V2_s probs maintains the correct position of class probability for the correct original strong image label and weak original label)
+er2s_all=np.zeros((n_sample))
+for i in range(n_sample):
+    er2s_all[i]=V2_s[i,labels[i,1]]-V2_s[i,labels[i,0]]
+er2s=np.mean(er2s_all)
+
+#calculate std of error in valence (strong)
+er2s_std=np.std(er2s_all)
+#er2s_std=er2s_std/2
+
+#calculate std of error in valence (weak)
+er2w_all=np.zeros((n_sample))
+for i in range(n_sample):
+    er2w_all[i]=V2_w[i,labels[i,1]]-V2_w[i,labels[i,0]]
+er2w=np.mean(er2w_all)
+
+er2w_std=np.std(er2w_all)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+    preprocess = transforms.Compose(
+         [
+             transforms.Resize((80,80)),
+             transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+         ]
+     )
 
     mask_percentages = np.arange(0.1, 1.1, 0.1)
     mask_percentages = np.append(mask_percentages,[.85,.95])
@@ -242,6 +479,6 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=batchsize_modified)#
     parser.add_argument('--ckpt_vqvae', type=str, default="/local/altamabp/checkpoint_correct/vqvae/model_epoch100_flat_vqvae80x80_64x400codebook.pth")
     parser.add_argument('--ckpt_distil', type=str, default="/local/altamabp/checkpoint_correct/distil/80x80_100_UTKFace_flat_144x400codebook_50mask_epoch100-.pt")
-    parser.add_argument('--ckpt_resnet50', type=str, default="/local/altamabp/checkpoint/classifier/weights_epoch100_fullTrain.pth")
+    parser.add_argument('--ckpt_resnet50', type=str, default="/local/altamabp/checkpoint_correct/classifier/weights_epoch50.pth")
     args = parser.parse_args()
     dist.launch(main, args.n_gpu, 1, 0, args.dist_url, args=(args,))

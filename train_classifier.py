@@ -204,7 +204,7 @@ nn.init.zeros_(model.fc.bias)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
-num_epochs = 35 # change as needed
+num_epochs = 50 # change as needed
 
 for epoch in range(num_epochs):
     # -------------------- TRAIN --------------------
