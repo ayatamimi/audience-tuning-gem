@@ -14,6 +14,7 @@ from torchvision.models import resnet50, ResNet50_Weights
 import math, sys, os
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from pathlib import Path
 
 run = neptune.init_run(
     project="UTKFaces",
@@ -23,6 +24,80 @@ run = neptune.init_run(
     #with_id="distil",
     source_files=["flat_reconstruct_random_based.py"]
 )
+
+import torch.nn.functional as F
+
+
+def make_match_strip_plot(pred, true, save_path=None, figsize=(12, 1.6), title_prefix="Match Strip"):
+    """
+    Plot a 'match strip' (green = correct, 0/1 row) comparing integer indices in pred vs true.
+    - pred, true: torch.Tensor or np.ndarray; any shape -> flattened to 1D
+    - save_path: optional path to save the figure (e.g., Path(.../"..._strip.png"))
+    - returns (fig, ax)
+    """
+    # to numpy 1D
+    if isinstance(pred, torch.Tensor):
+        pred_np = pred.detach().flatten().cpu().numpy()
+    else:
+        pred_np = np.asarray(pred).flatten()
+
+    if isinstance(true, torch.Tensor):
+        true_np = true.detach().flatten().cpu().numpy()
+    else:
+        true_np = np.asarray(true).flatten()
+
+    # match vector: 1 = correct, 0 = mismatch
+    match = (pred_np == true_np).astype(np.int32)
+    acc = (match.mean() * 100.0) #if match.size else 0.0
+
+    # plot
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.imshow(match[np.newaxis, :], aspect='auto', cmap='Greens', vmin=0, vmax=1)
+    ax.set_yticks([])
+    ax.set_xlabel("Token Position")
+    ax.set_title(f"{title_prefix} — green = correct ({acc:.1f}% acc)")
+    fig.tight_layout()
+
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=200, bbox_inches='tight')
+
+    return fig, ax
+
+
+def save_histogram_pred_true(pred, true, save_path, title="Index Distribution (Pred vs True)"):
+    """
+    Side-by-side histogram comparing counts per codebook index for pred vs true.
+    pred, true: torch.Tensor or np.ndarray of integer indices; any shape -> flattened.
+    save_path: file path to save the PNG (e.g., "..._hist.png")
+    """
+    # to numpy 1D
+    pred = pred.detach().flatten().cpu().numpy() if isinstance(pred, torch.Tensor) else np.asarray(pred).flatten()
+    true = true.detach().flatten().cpu().numpy() if isinstance(true, torch.Tensor) else np.asarray(true).flatten()
+
+    num_bins = int(max(pred.max(initial=0), true.max(initial=0)) + 1)
+    idx = np.arange(num_bins)
+    bins = np.arange(num_bins + 1) - 0.5  # center bars on integer indices
+
+    pred_counts, _ = np.histogram(pred, bins=bins)
+    true_counts, _ = np.histogram(true, bins=bins)
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    w = 0.45
+    ax.bar(idx - w/2, pred_counts, width=w, label=f"Predicted (total={pred_counts.sum()})")
+    ax.bar(idx + w/2, true_counts, width=w, label=f"True (total={true_counts.sum()})")
+    ax.set_xlabel("Codebook Index")
+    ax.set_ylabel("Count per Index")
+    ax.set_title(title)
+    ax.legend()
+    fig.tight_layout()
+
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
 
 def gradual_masking( distil, quantized,indices, mask_percentage):
     total_num = quantized.shape[1] 
@@ -172,6 +247,88 @@ def attach_bias_mask_feat(labels, masked_quantizes, mask, mask_perc,num_classes=
     return masked_exp_mask_feat_quantizes
 
 
+def _to_np_1d(x):
+    """Accepts torch.Tensor or np.ndarray of shape [1,N] or [N]; returns np.ndarray [N]."""
+    if isinstance(x, torch.Tensor):
+        x = x.detach().flatten().cpu().numpy()
+    else:
+        x = np.asarray(x).flatten()
+    return x
+
+def plot_index_histograms(pred, true, title="Index Distribution (Pred vs True)"):
+    """Side-by-side histogram of counts per codebook index."""
+    pred = _to_np_1d(pred)
+    true = _to_np_1d(true)
+
+    num_bins = int(max(pred.max(initial=0), true.max(initial=0)) + 1)
+    idx = np.arange(num_bins)
+    bins = np.arange(num_bins + 1) - 0.5
+
+    pred_counts, _ = np.histogram(pred, bins=bins)
+    true_counts, _ = np.histogram(true, bins=bins)
+
+    plt.figure(figsize=(12,5))
+    w = 0.45
+    plt.bar(idx - w/2, pred_counts, width=w, label=f"Predicted (total={pred_counts.sum()})")
+    plt.bar(idx + w/2, true_counts, width=w, label=f"True (total={true_counts.sum()})")
+    plt.xlabel("Codebook Index"); plt.ylabel("Count")
+    plt.title(title); plt.legend(); plt.tight_layout(); plt.show()
+
+def plot_confusion_matrix(pred, true, normalize_rows=True, title="Confusion Matrix"):
+    """Confusion matrix: rows=true index, cols=pred index."""
+    pred = _to_np_1d(pred).astype(int)
+    true = _to_np_1d(true).astype(int)
+
+    num_bins = int(max(pred.max(initial=0), true.max(initial=0)) + 1)
+    cm = np.zeros((num_bins, num_bins), dtype=np.float64)
+    for t, p in zip(true, pred):
+        cm[t, p] += 1
+
+    if normalize_rows:
+        row_sums = cm.sum(axis=1, keepdims=True) + 1e-12
+        cm = cm / row_sums
+
+    plt.figure(figsize=(7,6))
+    plt.imshow(cm, interpolation='nearest', aspect='auto')
+    plt.colorbar(label='Proportion per True Index' if normalize_rows else 'Count')
+    plt.xlabel("Predicted Index"); plt.ylabel("True Index")
+    plt.title(title); plt.tight_layout(); plt.show()
+
+def plot_match_strip(pred, true, title="Match Strip (green = correct)"):
+    """Single-row image showing token-wise correctness along sequence."""
+    pred = _to_np_1d(pred)
+    true = _to_np_1d(true)
+    match = (pred == true).astype(np.int32)
+
+    acc = match.mean() if match.size else 0.0
+    plt.figure(figsize=(12,1.6))
+    plt.imshow(match[np.newaxis, :], aspect='auto', cmap='Greens', vmin=0, vmax=1)
+    plt.yticks([]); plt.xlabel("Token Position")
+    plt.title(f"{title} — accuracy: {acc*100:.1f}%")
+    plt.tight_layout(); plt.show()
+
+def plot_index_series(pred, true, max_points=None, title="Indices per Position (True vs Pred)"):
+    """Line/marker plot over positions; optionally limit to first N points to reduce clutter."""
+    pred = _to_np_1d(pred)
+    true = _to_np_1d(true)
+
+    if max_points is not None:
+        pred = pred[:max_points]
+        true = true[:max_points]
+
+    x = np.arange(len(pred))
+    plt.figure(figsize=(12,4))
+    plt.plot(x, true, marker='o', linestyle='-', linewidth=1, markersize=3, label='True')
+    plt.plot(x, pred, marker='x', linestyle='--', linewidth=1, markersize=3, label='Predicted')
+
+    mismatch = pred != true
+    if mismatch.any():
+        plt.scatter(x[mismatch], pred[mismatch], s=18, marker='x', label='Mismatch (pred)')
+        plt.scatter(x[mismatch], true[mismatch], s=18, marker='o', label='Mismatch (true)')
+
+    plt.xlabel("Token Position"); plt.ylabel("Index")
+    plt.title(title); plt.legend(ncol=2); plt.tight_layout(); plt.show()
+
 def main(args):
     pass
 
@@ -192,9 +349,14 @@ args = parser.parse_args()
 dist.launch(main, args.n_gpu, 1, 0, args.dist_url, args=(args,))
 
 #def main(args):
-#torch.cuda.set_device(2)
-#torch.cuda.empty_cache()
-device = "cuda" if torch.cuda.is_available() else "cpu"
+#device = "cuda" if torch.cuda.is_available() else "cpu"
+if torch.cuda.is_available():
+    device = "cuda"
+    torch.cuda.set_device(2)
+    torch.cuda.empty_cache()
+else:
+    device= 'cpu'
+    
 args.distributed = dist.get_world_size() > 1
 
 labels= np.load('./checkpoint/vqvae/test_labels.npy')
@@ -276,97 +438,109 @@ mask_percentages = np.append(mask_percentages,[.85,.95])
 mask_percentages = np.sort(mask_percentages)
 
 average_errors = []
-mask_percentages=0.5
-perc=0.5
-#for perc in mask_percentages:
-reconstruction_errors = []
-cross_entropy_class_err = []
 
-criterion = nn.MSELoss()
-criterion_class = nn.CrossEntropyLoss()
-correct_random_pred = 0
-tot_sample = 0
-#for x in range(1,quantizes.shape[0], 5000):
-    #if x%5000 ==0:
-x=0
-#print(x)
-q = torch.from_numpy(quantizes[x])
-index = torch.from_numpy(indices[x])
-index = index.to(device)
-q = q.to(device)
-q = torch.reshape(q, (1, q.size(dim=0), q.size(dim=1)))
-
-with torch.no_grad():
-    q_masked, index_masked, mask = random_mask(q, index , n_sample, n_token,perc)                                
-    q_masked = q_masked.to(device)
-    index_masked = index_masked.to(device)
+for x in range(1,quantizes.shape[0], 1000):
+    reconstruction_errors = []
+    cross_entropy_class_err = []
     
-    masked_exp_mask_feat_train_quantizes = attach_bias_mask_feat (labels[x], q_masked, mask, perc)
-
-    outputs = model_distil(inputs_embeds = masked_exp_mask_feat_train_quantizes, output_hidden_states = True)
-    confidence_based_prediction = torch.argmax(outputs.logits, dim=2)
-    confidence_based_recons_index = index
-    #print('mask: ', mask)
+    criterion = nn.MSELoss()
+    criterion_class = nn.CrossEntropyLoss()
+    correct_random_pred = 0
+    tot_sample = 0
     
-    # mask: (1, 400) -> (400,), boolean
-    m = np.squeeze(mask, axis=0).astype(bool)   # or: m = mask[0].astype(bool)
-    
-    # replace where mask is True
-    confidence_based_recons_index[m] = confidence_based_prediction[0][m]
-    
-    #Reconstruct with distil predictions
-    confidence_based_recons_index = confidence_based_recons_index.to(device)
-    distil_out = model_vqvae.decode_code(torch.reshape(confidence_based_recons_index, (1,length,length)).to(device))
+    for perc in mask_percentages:
+        #if x%5000 ==0:
 
-    #Reconstruct Original
-    vqvae_out = model_vqvae.decode(torch.from_numpy(quant_b[x]).to(device)) #torch.reshape(torch.from_numpy(indices[x]), (1,length,length)).to(device)
-    index_masked_forvis = index.clone()
-    index_masked_forvis[mask[0]]=0
-    vqvae_masked_out = model_vqvae.decode_code(torch.reshape(index_masked_forvis, (1,length,length)).to(device))
+        #print(x)
+        q = torch.from_numpy(quantizes[x])
+        index = torch.from_numpy(indices[x])
+        index = index.to(device)
+        q = q.to(device)
+        q = torch.reshape(q, (1, q.size(dim=0), q.size(dim=1)))
+        
+        with torch.no_grad():
+            q_masked, index_masked, mask = random_mask(q, index , n_sample, n_token,perc)                                
+            q_masked = q_masked.to(device)
+            index_masked = index_masked.to(device)
+            
+            masked_exp_mask_feat_train_quantizes = attach_bias_mask_feat (labels[x], q_masked, mask, perc)
+        
+            outputs = model_distil(inputs_embeds = masked_exp_mask_feat_train_quantizes, output_hidden_states = True)
+            confidence_based_prediction = torch.argmax(outputs.logits, dim=2)
+            confidence_based_recons_index = index.clone()
+            #print('mask: ', mask)
+            
+            # mask: (1, 400) -> (400,), boolean
+            m = np.squeeze(mask, axis=0).astype(bool)   # or: m = mask[0].astype(bool)
+            
+            # replace where mask is True
+            #confidence_based_recons_index[m] = confidence_based_prediction[0][m]
+            
+            #Reconstruct with distil predictions
+            confidence_based_recons_index = confidence_based_recons_index.to(device)
+            distil_out = model_vqvae.decode_code(torch.reshape(confidence_based_prediction, (1,length,length)).to(device))#confidence_based_recons_index
+        
+            #Reconstruct Original
+            vqvae_out = model_vqvae.decode(torch.from_numpy(quant_b[x]).to(device)) #torch.reshape(torch.from_numpy(indices[x]), (1,length,length)).to(device)
+            index_masked_forvis = index.clone()
+            index_masked_forvis[mask[0]]=0
+            vqvae_masked_out = model_vqvae.decode_code(torch.reshape(index_masked_forvis, (1,length,length)).to(device))
+        
+            # Label outputs
+            vqvae_out = vqvae_out.unsqueeze(0)
+            vqvae_img = preprocess(vqvae_out)
+            vqvae_img = vqvae_img.to(device)
+            vqvae_img_prob = classifier(vqvae_img)
+            _, vqvae_img_label = torch.max(vqvae_img_prob, 1)
+            
+            rand_mask_img = preprocess(distil_out)
+            rand_mask_img = rand_mask_img.to(device)
+            rand_mask_img_prob = classifier(rand_mask_img)
+            _, rand_mask_img_label = torch.max(rand_mask_img_prob, 1)
+            correct_random_pred += (rand_mask_img_label == vqvae_img_label).sum().item()
+            print(f'rand_mask_img_label is {rand_mask_img_label}')
+            print(f'vqvae_img_label is {vqvae_img_label}')
+            #print(f'rand_mask_img_label is {rand_mask_img_label.item()}')
+            #print(f'vqvae_img_label is {vqvae_img_label.item()}')
+            print(f'correct_random_pred is {correct_random_pred}')
+            tot_sample += 1
+            print(tot_sample)
+        
+            # your main image path (same as in utils.save_image)
+            base_path = Path("./image_correct/vqvae_reconstruction") / \
+                f"80x80_random_{vqvae_img_label.item()}_{rand_mask_img_label.item()}_{int(perc*100)}_{str(x).zfill(5)}.png"
+            
+            # save the match strip 
+            strip_path = base_path.with_name(base_path.stem + "_strip" + base_path.suffix)
+            make_match_strip_plot(confidence_based_prediction, index, save_path=strip_path)
+            
+            # save the histogram figure
+            hist_path = base_path.with_name(base_path.stem + "_hist" + base_path.suffix)
+            save_histogram_pred_true(confidence_based_prediction, confidence_based_recons_index, save_path=hist_path)
+            
+            # save your main grid as you already do
+            utils.save_image(
+                torch.cat([vqvae_out, vqvae_masked_out, distil_out], 0).to(device),
+                f"./image_correct/vqvae_reconstruction/80x80_random_{vqvae_img_label.item()}_{rand_mask_img_label.item()}_{int(perc*100)}_{str(x).zfill(5)}.png",
+                nrow=3,
+                normalize=True,
+                value_range=(-1, 1),
+            )
 
-    # Label outputs
-    vqvae_out = vqvae_out.unsqueeze(0)
-    vqvae_img = preprocess(vqvae_out)
-    vqvae_img = vqvae_img.to(device)
-    vqvae_img_prob = classifier(vqvae_img)
-    _, vqvae_img_label = torch.max(vqvae_img_prob, 1)
-    
-    rand_mask_img = preprocess(distil_out)
-    rand_mask_img = rand_mask_img.to(device)
-    rand_mask_img_prob = classifier(rand_mask_img)
-    _, rand_mask_img_label = torch.max(rand_mask_img_prob, 1)
-    correct_random_pred += (rand_mask_img_label == vqvae_img_label).sum().item()
-    print(f'rand_mask_img_label is {rand_mask_img_label}')
-    print(f'vqvae_img_label is {vqvae_img_label}')
-    #print(f'rand_mask_img_label is {rand_mask_img_label.item()}')
-    #print(f'vqvae_img_label is {vqvae_img_label.item()}')
-    print(f'correct_random_pred is {correct_random_pred}')
-    tot_sample += 1
-    print(tot_sample)
 
-
-    #if x%1000 ==0:
-    utils.save_image(
-        torch.cat([vqvae_out, vqvae_masked_out, distil_out], 0).to(device),
-        f"./image_correct/vqvae_reconstruction/random/80x80_random_{vqvae_img_label.item()}_{rand_mask_img_label.item()}_{int(perc*100)}_{str(x).zfill(5)}.png",
-        nrow=3,
-        normalize=True,
-        value_range=(-1, 1),
-    )
-
-recon_loss = criterion(distil_out, vqvae_out)
-#run["recons/mse_per_image_random_mask"].log(recon_loss.item())
-reconstruction_errors.append(recon_loss.item())
-class_loss = criterion_class(rand_mask_img_prob, vqvae_img_prob)
-#run["recons/cross_entropy_per_image_random_mask"].log(class_loss.item())
-cross_entropy_class_err.append(class_loss.item())
-
-#run["recons/average_mse_per_precision_random_mask"].log(np.mean(reconstruction_errors))
-#run["recons/average_cross_entropy_error_random_mask"].log(np.mean(cross_entropy_class_err))
-average_errors.append(np.mean(reconstruction_errors))
-pred_acc_random_mask = correct_random_pred/tot_sample
-pred_err_random_mask = 1-pred_acc_random_mask
-#run["recons/average_classification_accuracy_random"].log(pred_err_random_mask)
+        recon_loss = criterion(distil_out, vqvae_out)
+        run["recons/mse_per_image_random_mask"].log(recon_loss.item())
+        reconstruction_errors.append(recon_loss.item())
+        class_loss = criterion_class(rand_mask_img_prob, vqvae_img_prob)
+        run["recons/cross_entropy_per_image_random_mask"].log(class_loss.item())
+        cross_entropy_class_err.append(class_loss.item())
+            
+    run["recons/average_mse_per_precision_random_mask"].log(np.mean(reconstruction_errors))
+    run["recons/average_cross_entropy_error_random_mask"].log(np.mean(cross_entropy_class_err))
+    average_errors.append(np.mean(reconstruction_errors))
+    pred_acc_random_mask = correct_random_pred/tot_sample
+    pred_err_random_mask = 1-pred_acc_random_mask
+    run["recons/average_classification_accuracy_random"].log(pred_err_random_mask)
 
 
 # Plotting the reconstruction errors
@@ -378,6 +552,7 @@ plt.grid(True)
 plot_path = './image_correct/distil_reconstruction/random_error_vs_precision.png'
 plt.savefig(plot_path)
 plt.show()#close()
+
 
 
 # =============================================================================

@@ -11,6 +11,7 @@ from vqvae import FlatVQVAE
 import distributed as dist
 import math
 import neptune.new as neptune
+import torch.nn.functional as F
 
 
 run = neptune.init_run(
@@ -121,6 +122,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 val_labels= np.load('./checkpoint_correct/vqvae/val_labels.npy')
 val_labels = torch.from_numpy(val_labels)
+val_labels= F.one_hot(val_labels, num_classes=10).float()
 
 val_quantizes = np.load('./checkpoint_correct/vqvae/val_codebook_vqvae_80x80_codebook_64x456.npy')
 
@@ -129,6 +131,7 @@ val_quantizes = np.load('./checkpoint_correct/vqvae/val_codebook_vqvae_80x80_cod
 
 train_labels = np.load('./checkpoint_correct/vqvae/train_labels.npy')
 train_labels = torch.from_numpy(train_labels)
+train_labels= F.one_hot(train_labels, num_classes=10).float()
 
 train_quantizes = np.load('./checkpoint_correct/vqvae/train_codebook_vqvae_80x80_codebook_64x456.npy')
 
@@ -144,6 +147,22 @@ reconstructed_images_val = decode_quantizes(model_vqvae, val_quantizes, device="
 train_dataset = ReconstructedDataset(reconstructed_images_train, train_labels)
 val_dataset=  ReconstructedDataset(reconstructed_images_val, val_labels)
 
+# =============================================================================
+# plot image with [-1,1] normalization
+# import matplotlib.pyplot as plt
+# plt.imshow(reconstructed_images_val[5000].permute(1, 2, 0))         # (H,W,C)
+# plt.axis('off')
+# plt.show()
+# 
+# 
+# denormalize back to original
+# mean = torch.tensor([0.6154290437698364, 0.46279090642929077, 0.38601234555244446]).view(3,1,1)
+# std  = torch.tensor([0.24672381579875946, 0.22112978994846344, 0.21502047777175903]).view(3,1,1)
+# img = (reconstructed_images_val[5000] * std) + mean
+# img = img.clamp(0,1)
+# plt.imshow(img.permute(1,2,0))
+# plt.axis('off'); plt.show()
+# =============================================================================
 
 
 batchsize_modified=16
@@ -171,7 +190,7 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
 # Training loop
-num_epochs = 50  # Adjust as needed
+num_epochs = 35  # Adjust as needed
 
 for epoch in range(num_epochs):
     model.train()
@@ -197,19 +216,22 @@ for epoch in range(num_epochs):
 
         # Accuracy calculation
         _, predicted = torch.max(outputs, 1)
+        _, labels = torch.max(labels, 1)
+        
         total += labels.size(0)
         correct += (predicted == labels).sum().item()
 
     # Calculate average loss and accuracy
     epoch_loss = running_loss / len(train_loader)
     epoch_accuracy = 100 * correct / total
-    run["train/classifier-loss"].log(epoch_loss.item())
+    run["train/classifier-loss"].log(epoch_loss)
 
     print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_accuracy:.2f}%")
     torch.save(model.state_dict(), f"/local/altamabp/checkpoint_correct/classifier/weights_epoch{str(epoch + 1).zfill(2)}.pth")
 
 # Define classifier and load saved model(weights)
 classifier = resnet50(pretrained=False)
+classifier.fc = nn.Linear(classifier.fc.in_features, 10) 
 models_list = os.listdir("/local/altamabp/checkpoint_correct/classifier")
 models_list.sort()
 for model_name in models_list:
@@ -227,12 +249,13 @@ for model_name in models_list:
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = classifier(inputs)
             _, predicted = torch.max(outputs, 1)
+            _, labels = torch.max(labels, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
             loss = criterion(outputs, labels)
             total_loss += loss.item()
     
-    run["val/classifier-loss"].log(total_loss.item())
+    run["val/classifier-loss"].log(total_loss)
     accuracy = correct / total
     print(f'Accuracy: {accuracy * 100:.2f}%')
     print(f'loss: {total_loss:.2f}%')
