@@ -122,7 +122,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 val_labels= np.load('./checkpoint_correct/vqvae/val_labels.npy')
 val_labels = torch.from_numpy(val_labels)
-val_labels= F.one_hot(val_labels, num_classes=10).float()
+#val_labels= F.one_hot(val_labels, num_classes=10).float()
 
 val_quantizes = np.load('./checkpoint_correct/vqvae/val_codebook_vqvae_80x80_codebook_64x456.npy')
 
@@ -131,9 +131,20 @@ val_quantizes = np.load('./checkpoint_correct/vqvae/val_codebook_vqvae_80x80_cod
 
 train_labels = np.load('./checkpoint_correct/vqvae/train_labels.npy')
 train_labels = torch.from_numpy(train_labels)
-train_labels= F.one_hot(train_labels, num_classes=10).float()
+#train_labels= F.one_hot(train_labels, num_classes=10).float()
 
 train_quantizes = np.load('./checkpoint_correct/vqvae/train_codebook_vqvae_80x80_codebook_64x456.npy')
+
+
+#### test set###
+
+test_labels = np.load('./checkpoint_correct/vqvae/test_labels.npy')
+test_labels = torch.from_numpy(test_labels)
+#test_labels= F.one_hot(test_labels, num_classes=10).float()
+
+test_quantizes = np.load('./checkpoint_correct/vqvae/test_codebook_vqvae_80x80_codebook_64x456.npy')
+
+
 
 
 model_vqvae = FlatVQVAE().to(device)
@@ -142,10 +153,11 @@ model_vqvae = model_vqvae.to(device)
 model_vqvae.eval()
 reconstructed_images_train = decode_quantizes(model_vqvae, train_quantizes, device="cuda:1", batch_size=16)
 reconstructed_images_val = decode_quantizes(model_vqvae, val_quantizes, device="cuda:1", batch_size=16)
-
+reconstructed_images_test= decode_quantizes(model_vqvae, test_quantizes, device="cuda:1",  batch_size=16)
 
 train_dataset = ReconstructedDataset(reconstructed_images_train, train_labels)
 val_dataset=  ReconstructedDataset(reconstructed_images_val, val_labels)
+test_dataset=  ReconstructedDataset(reconstructed_images_test, test_labels)
 
 # =============================================================================
 # plot image with [-1,1] normalization
@@ -168,6 +180,9 @@ val_dataset=  ReconstructedDataset(reconstructed_images_val, val_labels)
 batchsize_modified=16
 train_loader = DataLoader(train_dataset, batch_size=batchsize_modified, shuffle=True, num_workers=0)#256
 val_loader = DataLoader(val_dataset, batch_size=batchsize_modified, shuffle=True, num_workers=0)
+test_loader = DataLoader(test_dataset, batch_size=batchsize_modified, shuffle=True, num_workers=0)
+
+
 
 transform = transforms.Compose(
     [
@@ -189,45 +204,78 @@ nn.init.zeros_(model.fc.bias)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
-# Training loop
-num_epochs = 35  # Adjust as needed
+num_epochs = 35 # change as needed
 
 for epoch in range(num_epochs):
+    # -------------------- TRAIN --------------------
     model.train()
-    running_loss = 0.0
-    correct = 0
-    total = 0
+    train_loss_sum = 0.0
+    train_correct = 0
+    train_total = 0
+
     for inputs, labels in tqdm(train_loader):
+        # If labels are one-hot, convert once here
+        if labels.ndim > 1 and labels.size(-1) > 1:
+            targets = labels.argmax(dim=1)
+        else:
+            targets = labels
+
         inputs = transform(inputs)
-        inputs, labels = inputs.to(device), labels.to(device)
+        inputs, targets = inputs.to(device), targets.to(device)
 
-        # Zero the parameter gradients
         optimizer.zero_grad()
-
-        # Forward pass
         outputs = model(inputs)
-        loss = criterion(outputs, labels)
-
-        # Backward pass
+        loss = criterion(outputs, targets)  # CrossEntropyLoss expects logits + class indices
         loss.backward()
         optimizer.step()
 
-        running_loss += loss.item()
+        train_loss_sum += loss.item() * inputs.size(0)  # sum over samples
+        preds = outputs.argmax(dim=1)
+        train_total += targets.size(0)
+        train_correct += (preds == targets).sum().item()
 
-        # Accuracy calculation
-        _, predicted = torch.max(outputs, 1)
-        _, labels = torch.max(labels, 1)
-        
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
+    train_loss = train_loss_sum / train_total
+    train_acc = 100.0 * train_correct / train_total
+    run["train/classifier-loss"].log(train_loss)
+    print(f"Epoch [{epoch+1}/{num_epochs}] Train: loss={train_loss:.4f}, acc={train_acc:.2f}%")
 
-    # Calculate average loss and accuracy
-    epoch_loss = running_loss / len(train_loader)
-    epoch_accuracy = 100 * correct / total
-    run["train/classifier-loss"].log(epoch_loss)
+    # -------------------- VALIDATE --------------------
+    model.eval()
+    val_loss_sum = 0.0
+    val_correct = 0
+    val_total = 0
 
-    print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_accuracy:.2f}%")
-    torch.save(model.state_dict(), f"/local/altamabp/checkpoint_correct/classifier/weights_epoch{str(epoch + 1).zfill(2)}.pth")
+    with torch.no_grad():
+        for inputs, labels in tqdm(val_loader):
+            if labels.ndim > 1 and labels.size(-1) > 1:
+                targets = labels.argmax(dim=1)
+            else:
+                targets = labels
+
+            
+            inputs = transform(inputs)
+            inputs, targets = inputs.to(device), targets.to(device)
+
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+
+            val_loss_sum += loss.item() * inputs.size(0)
+            preds = outputs.argmax(dim=1)
+            val_total += targets.size(0)
+            val_correct += (preds == targets).sum().item()
+
+    val_loss = val_loss_sum / val_total
+    val_acc = 100.0 * val_correct / val_total
+    run["val/classifier-loss"].log(val_loss)
+    run["val/classifier-acc"].log(val_acc)
+    print(f"           Val:   loss={val_loss:.4f}, acc={val_acc:.2f}%")
+
+    # -------------------- SAVE --------------------
+    torch.save(
+        model.state_dict(),
+        f"/local/altamabp/checkpoint_correct/classifier/weights_epoch{str(epoch+1).zfill(2)}.pth"
+    )
+
 
 # Define classifier and load saved model(weights)
 classifier = resnet50(pretrained=False)
@@ -244,18 +292,18 @@ for model_name in models_list:
     total_loss = 0
 
     with torch.no_grad():
-        for inputs, labels in tqdm(val_loader):
+        for inputs, labels in tqdm(test_loader):
             inputs = transform(inputs)
             inputs, labels = inputs.to(device), labels.to(device)
             outputs = classifier(inputs)
             _, predicted = torch.max(outputs, 1)
-            _, labels = torch.max(labels, 1)
+
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
             loss = criterion(outputs, labels)
             total_loss += loss.item()
     
-    run["val/classifier-loss"].log(total_loss)
+    run["test/classifier-loss"].log(total_loss)
     accuracy = correct / total
     print(f'Accuracy: {accuracy * 100:.2f}%')
     print(f'loss: {total_loss:.2f}%')
