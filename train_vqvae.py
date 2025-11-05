@@ -14,7 +14,7 @@ from vqvae import FlatVQVAE
 # from scheduler import CycleScheduler
 import distributed as dist
 from torchsummary import summary
-from torch.utils.tensorboard import SummaryWriter
+#from torch.utils.tensorboard import SummaryWriter
 import neptune.new as neptune
 from torch.optim.lr_scheduler import CyclicLR
 
@@ -180,7 +180,7 @@ def main(args):
         train(i, data_loader, val_loader, model, optimizer, scheduler, device)
         x=i
         if dist.is_primary():
-            model_path = os.path.join(args.save_path_models, f"model_epoch{i+1}_flat_vqvae80x80_64x400codebook.pth")
+            model_path = os.path.join(args.save_path_models, f"model_epoch{i+1}_flat_vqvae80x80_16x16codebook.pth")
             torch.save(model.state_dict(), model_path)
             
 
