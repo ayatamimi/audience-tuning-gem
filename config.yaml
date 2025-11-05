@@ -5,8 +5,8 @@ path:
   UTKFace_test: /local/altamabp/UTKFace_dataset_subset_15000_restructured #10000 images
   recnstructed_imge: /local/altamabp/image_correct/vqvae_reconstruction/
   vqvae_model: /local/altamabp/checkpoint_correct/vqvae/
-  classifier_model:
-  distilbert_model: 
+  classifier_model: /local/altamabp/checkpoint_correct/classifier/
+  distilbert_model: /local/altamabp/checkpoint_correct/distil/
 
 params:
   vqvae:
