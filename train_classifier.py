@@ -202,13 +202,10 @@ nn.init.zeros_(model.fc.bias)
 
 # Define loss function and optimizer
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=1e-4, nesterov=True)#lr=0.001, momentum=0.9)
+optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4, nesterov=True)#lr=0.001, momentum=0.9)
 
-num_epochs = 50 # change as needed
+num_epochs = 100 # change as needed
 
-model.load_state_dict(torch.load("/local/altamabp/checkpoint_correct/classifier/weights_epoch50.pth"))
-print('loaded pretrained_classifier....')
-model.to(device)
 
 for epoch in range(num_epochs):
     # -------------------- TRAIN --------------------
@@ -287,6 +284,7 @@ classifier = resnet50(pretrained=False)
 classifier.fc = nn.Linear(classifier.fc.in_features, 10) 
 models_list = os.listdir("/local/altamabp/checkpoint_correct/classifier")
 models_list.sort()
+
 for model_name in models_list:
     print(model_name)
     classifier.load_state_dict(torch.load(os.path.join("/local/altamabp/checkpoint_correct/classifier/",model_name)))
