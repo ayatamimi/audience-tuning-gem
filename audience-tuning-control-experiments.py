@@ -371,7 +371,7 @@ def main(args):
     # dataset/loader
     dataset = datasets.ImageFolder("./UTKFace_dataset_subset_15000_structured", transform=preprocess)
     loader = DataLoader(dataset, batch_size=64, shuffle=False)#, num_workers=4, pin_memory=True)
-    
+
     images=[]
     quantizes=[]
     indices=[]

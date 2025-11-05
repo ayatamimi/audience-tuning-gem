@@ -202,8 +202,8 @@ class FlatVQVAE(nn.Module):
         channel=64,
         n_res_block=2,
         n_res_channel=72,
-        embed_dim=64,
-        n_embed=456,
+        embed_dim=16,
+        n_embed=16,
         decay=0.99,
     ):
         super().__init__()
