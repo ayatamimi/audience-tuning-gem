@@ -194,11 +194,11 @@ transform = transforms.Compose(
 
 model = resnet50(weights=None)
 model.fc = nn.Linear(model.fc.in_features, 10)  
-#model.to(device)
+model.to(device)
 
 nn.init.normal_(model.fc.weight)#, mean=0.0, std=0.01)
 nn.init.zeros_(model.fc.bias)
-
+      
 
 # Define loss function and optimizer
 criterion = nn.CrossEntropyLoss()
