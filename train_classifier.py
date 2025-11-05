@@ -194,7 +194,7 @@ transform = transforms.Compose(
 
 model = resnet50(weights=None)
 model.fc = nn.Linear(model.fc.in_features, 10)  
-model.to(device)
+#model.to(device)
 
 nn.init.normal_(model.fc.weight)#, mean=0.0, std=0.01)
 nn.init.zeros_(model.fc.bias)
@@ -202,9 +202,13 @@ nn.init.zeros_(model.fc.bias)
 
 # Define loss function and optimizer
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=1e-4, nesterov=True)#lr=0.001, momentum=0.9)
 
 num_epochs = 50 # change as needed
+
+model.load_state_dict(torch.load("/local/altamabp/checkpoint_correct/classifier/weights_epoch50.pth"))
+print('loaded pretrained_classifier....')
+model.to(device)
 
 for epoch in range(num_epochs):
     # -------------------- TRAIN --------------------
@@ -263,6 +267,7 @@ for epoch in range(num_epochs):
             preds = outputs.argmax(dim=1)
             val_total += targets.size(0)
             val_correct += (preds == targets).sum().item()
+            run["val/classifier-loss-per-step"].log(val_loss_sum)
 
     val_loss = val_loss_sum / val_total
     val_acc = 100.0 * val_correct / val_total
@@ -290,21 +295,47 @@ for model_name in models_list:
     correct = 0
     total = 0
     total_loss = 0
+    
+    
+    ##added
+    test_loss_sum = 0.0
+    test_correct = 0
+    test_total = 0
 
     with torch.no_grad():
         for inputs, labels in tqdm(test_loader):
-            inputs = transform(inputs)
-            inputs, labels = inputs.to(device), labels.to(device)
-            outputs = classifier(inputs)
-            _, predicted = torch.max(outputs, 1)
+            if labels.ndim > 1 and labels.size(-1) > 1:
+                targets = labels.argmax(dim=1)
+            else:
+                targets = labels
 
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-            loss = criterion(outputs, labels)
-            total_loss += loss.item()
+            
+            inputs = transform(inputs)
+            inputs, targets = inputs.to(device), targets.to(device)
+
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+
+            test_loss_sum += loss.item() * inputs.size(0)
+            preds = outputs.argmax(dim=1)
+            test_total += targets.size(0)
+            test_correct += (preds == targets).sum().item()
+            run["test/classifier-loss-per-step"].log(test_loss_sum)
+# =============================================================================
+#             inputs = transform(inputs)
+#             inputs, labels = inputs.to(device), labels.to(device)
+#             outputs = classifier(inputs)
+#             _, predicted = torch.max(outputs, 1)
+# 
+#             total += labels.size(0)
+#             correct += (predicted == labels).sum().item()
+#             loss = criterion(outputs, labels)
+#             total_loss += loss.item()
+# =============================================================================
+            run["test/classifier-loss"].log(total_loss)
     
-    run["test/classifier-loss"].log(total_loss)
-    accuracy = correct / total
+    run["test/classifier-loss"].log(test_loss_sum/test_total)
+    accuracy = test_correct / test_total
     print(f'Accuracy: {accuracy * 100:.2f}%')
     print(f'loss: {total_loss:.2f}%')
 
