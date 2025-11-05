@@ -13,7 +13,7 @@ pipeline_vqvae-transformer-classification_gpu01_correct_final-automated_norm01-V
 pipeline_vqvae-transformer-classification_gpu01_correct_final-automated_norm01.py
 pipeline_vqvae-transformer-classification_gpu01_correct_final-automated_norm01_trans-loss-goes-down.py
 pipeline_vqvae_transformer_classification.py
-train_vqvae.py
+train_vqvae-original.py
 
 kernel-1353196.json
 

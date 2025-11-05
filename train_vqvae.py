@@ -27,7 +27,7 @@ run = neptune.init_run(
     capture_stdout=False,
     capture_stderr=False,
     with_id="UT-367",
-    source_files=["train_vqvae-with_val.py"]
+    source_files=["train_vqvae.py"]
 )
 
 
