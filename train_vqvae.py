@@ -26,7 +26,7 @@ run = neptune.init_run(
     api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiIwMmExYTliOC1mYjkyLTQ4M2YtYjFiYS1iZWQ1Y2E0OTJlNTkifQ==",
     capture_stdout=False,
     capture_stderr=False,
-    with_id="UT-367",
+#    with_id="UT-367",
     source_files=["train_vqvae.py"]
 )
 

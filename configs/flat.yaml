@@ -1,0 +1,32 @@
+# configs/flat.yaml
+data:
+  data_root: "/local/altamabp/"
+  train_subdir: "UTKFace_dataset_subset_150000_structured"
+  val_subdir: "UTKFace_dataset_subset_10000_structured"
+  input_size: 128       # smaller is fine for flat models, adjust if needed
+
+training:
+  bs: 128               # per-GPU batch size
+  epochs: 150
+  lr: 0.0003
+  num_workers: 4
+  beta: 0.25
+  seed: 42
+
+model:
+  model_type: "EnhancedFlatVQVAE"
+  num_levels: 1
+  codebook_size: 124
+  codebook_dim: 16
+  embed_dim: 16
+  latent_channel: 32
+  rotation_trick: true
+  kmeans_init: true
+  decay: 0.99
+  learnable_codebook: false
+  ema_update: true
+  threshold_dead: 2
+
+system:
+  run_dir: "./runs/flat"
+  torch_compile: false

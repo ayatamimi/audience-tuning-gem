@@ -199,11 +199,11 @@ class FlatVQVAE(nn.Module):
     def __init__(
         self,
         in_channel=3,
-        channel=64,
+        channel=16,#32
         n_res_block=2,
-        n_res_channel=72,
+        n_res_channel=72,#16
         embed_dim=16,
-        n_embed=16,
+        n_embed=124,
         decay=0.99,
     ):
         super().__init__()

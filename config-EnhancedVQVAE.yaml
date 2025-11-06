@@ -1,0 +1,57 @@
+# configs/flat.yaml
+multiprocessing:
+  gpu:
+    gpu_ids: 
+    threshold: 5.0
+    filter_by_threshold: true
+
+path:
+  UTKFace: /local/altamabp/UTKFace_dataset
+  UTKFace_train: /local/altamabp/UTKFace_dataset_subset_150000_restructured #130000 images
+  UTKFace_val: /local/altamabp/UTKFace_dataset_subset_10000_restructured #10000 images
+  UTKFace_test: /local/altamabp/UTKFace_dataset_subset_15000_restructured #10000 images
+  recostructed_imge: /local/altamabp/image_correct/vqvae_reconstruction/
+  vqvae_model: /local/altamabp/checkpoint_correct/vqvae/
+  classifier_model: /local/altamabp/checkpoint_correct/classifier/
+  distilbert_model: /local/altamabp/checkpoint_correct/distil/
+
+params:
+  vqvae:
+    batch_size: 128
+    latent_loss_weight: 0.25
+    diversity_loss_weight: 0.001
+    num_epochs: 100
+    lr: 1e-4
+    weight_decay: 1e-4
+
+data:
+  data_root: "/local/altamabp/"
+  train_subdir: "UTKFace_dataset_subset_150000_structured"
+  val_subdir: "UTKFace_dataset_subset_10000_structured"
+  input_size: 128       # smaller is fine for flat models, adjust if needed
+
+training:
+  bs: 128               # per-GPU batch size
+  epochs: 100
+  lr: 0.0003
+  num_workers: 4
+  beta: 0.25
+  seed: 42
+
+model:
+  model_type: "EnhancedFlatVQVAE"
+  num_levels: 1
+  codebook_size: 124
+  codebook_dim: 16
+  embed_dim: 16
+  latent_channel: 32
+  rotation_trick: true
+  kmeans_init: true
+  decay: 0.99
+  learnable_codebook: false
+  ema_update: true
+  threshold_dead: 2
+
+system:
+  run_dir: "./runs/flat"
+  torch_compile: false

@@ -7,7 +7,7 @@ from torchvision import utils, datasets, transforms
 import distributed as dist
 import matplotlib.pyplot as plt
 from transformers import DistilBertForMaskedLM, DistilBertConfig
-from vqvae import FlatVQVAE
+from vqvae import FlatVQVAE, EnhancedFlatVQVAE
 from PIL import Image
 import neptune.new as neptune
 from torchvision.models import resnet50, ResNet50_Weights
@@ -403,7 +403,7 @@ model_distil = model_distil.to(device)
 model_distil.eval()
 
 #Define VQVAE model
-model_vqvae = FlatVQVAE().to(device)
+model_vqvae = EnhancedFlatVQVAE().to(device) #FlatVQVAE().to(device)
 model_vqvae.load_state_dict(torch.load(args.ckpt_vqvae, map_location=torch.device('cpu')))
 model_vqvae = model_vqvae.to(device)
 model_vqvae.eval()

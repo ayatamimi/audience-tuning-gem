@@ -170,26 +170,29 @@ def main(args):
 
     #### validation set###
     
-    val_labels= np.load('/local/altamabp/checkpoint_correct/vqvae/val_labels.npy')
+    val_labels= np.load('./checkpoint_correct/vqvae/val_labels_16x124.npy')
+    print('val_labels shape: ',val_labels.shape)
     
-    val_indices = np.load('/local/altamabp/checkpoint_correct/vqvae/val_latent_space_vqvae_80x80_codebook_64x456.npy')
+    val_indices = np.load('./checkpoint_correct/vqvae/val_latent_space_vqvae_80x80_codebook_16x124.npy')
+    print('val_indices shape: ',val_indices.shape)
     n, h, w = val_indices.shape
     val_indices = val_indices.reshape(n, h * w)
-    
-    val_quantizes = np.load('/local/altamabp/checkpoint_correct/vqvae/val_codebook_vqvae_80x80_codebook_64x456.npy')
+ 
+    val_quantizes = np.load('./checkpoint_correct/vqvae/val_codebook_vqvae_80x80_codebook_16x124.npy')
+    print('val_quantizes shape: ',val_quantizes.shape)
     n, c, h, w = val_quantizes.shape
     val_quantizes = val_quantizes.transpose(0, 2, 3, 1)
     val_quantizes = val_quantizes.reshape(n, h * w, c)
     
     #### train set###
     
-    train_labels = np.load('/local/altamabp/checkpoint_correct/vqvae/train_labels.npy')
+    train_labels = np.load('/local/altamabp/checkpoint_correct/vqvae/train_labels_16x124.npy')
     
-    train_indices = np.load('/local/altamabp/checkpoint_correct/vqvae/train_latent_space_vqvae_80x80_codebook_64x456.npy')
+    train_indices = np.load('/local/altamabp/checkpoint_correct/vqvae/train_latent_space_vqvae_80x80_codebook_16x124.npy')
     n, h, w = train_indices.shape
     train_indices = train_indices.reshape(n, h * w)
 
-    train_quantizes = np.load('/local/altamabp/checkpoint_correct/vqvae/train_codebook_vqvae_80x80_codebook_64x456.npy')
+    train_quantizes = np.load('/local/altamabp/checkpoint_correct/vqvae/train_codebook_vqvae_80x80_codebook_16x124.npy')
     n, c, h, w = train_quantizes.shape
     train_quantizes = train_quantizes.transpose(0, 2, 3, 1)
     train_quantizes = train_quantizes.reshape(n, h * w, c)
@@ -277,10 +280,10 @@ def main(args):
 #####################Model Config###########################
     cfg = DistilBertConfig(
             vocab_size=vocab_size,
-            hidden_size=distil_d_embed_vec,
+            hidden_size=distil_d_embed_vec, # 27 = 16 d_emb + 10 one-hot-encoded bias + 1 mask feat
             sinusoidal_pos_embds=False,
             n_layers=6,
-            n_heads=5,
+            n_heads=3, #5
             max_position_embeddings=n_tokens
     )
 
@@ -332,7 +335,7 @@ def main(args):
             print(f'Validation loss decreased to : {min_validation_loss}')
         
         if dist.is_primary():
-            torch.save(model.state_dict(), f"/local/altamabp/checkpoint_correct/distil/80x80_100_UTKFace_flat_144x400codebook_50mask_epoch{str(j).zfill(3)}_with-ignore-index.pt")
+            torch.save(model.state_dict(), f"/local/altamabp/checkpoint_correct/distil/80x80_100_UTKFace_flat_16x124codebook_50mask_epoch{str(j).zfill(3)}_with-ignore-index.pt")
 
 
 batchsize_modified=16
@@ -350,7 +353,7 @@ if __name__ == "__main__":
     parser.add_argument("--dist_url", default=f"tcp://127.0.0.1:{port}")
 
     #parser.add_argument("--size", type=int, default=80)
-    parser.add_argument("--epoch", type=int, default=800)
+    parser.add_argument("--epoch", type=int, default=400)
     parser.add_argument("--batch_size", type=int, default=batchsize_modified)#256
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--sched", type=str, default="linearW")

@@ -1,7 +1,7 @@
 import os, yaml, argparse, json, torch, mlflow, sys
 from torch import nn, optim
 from torch.nn.parallel import DistributedDataParallel as DDP
-from vqvae import EnhancedFlatVQVAE
+from vqvae import FlatVQVAE
 from data_utils import CustomImageNetDataV2, CustomLoader
 from gpu_utils import select_gpus
 import torch.distributed as tdist
@@ -11,6 +11,8 @@ from PIL import Image
 from tqdm import tqdm
 from torchvision import datasets, transforms, utils 
 from torch.utils.data import DataLoader
+
+codebook_size='16x124'
 
 # ---------- Prioritize Task -----------
 os.nice(19)
@@ -72,7 +74,7 @@ def load_best_params(model_path):
 
 # ---------- Load Best Model ----------
 def load_best_model_path(model_path, epoch):
-    return os.path.join(model_path, f'train_checkpoint_best.pt')# "model_epoch{epoch}_flat_vqvae80x80_16x16codebook.pth") #
+    return os.path.join(model_path, f"model_epoch{epoch}_flat_vqvae80x80_{codebook_size}codebook.pth") 
 
 def save_indices_quantized_labels(model,loader,device,path_cfg, model_path, tag, best_params, calculate_loss=False):
     indices= [] # indices of all images - latent space
@@ -94,7 +96,7 @@ def save_indices_quantized_labels(model,loader,device,path_cfg, model_path, tag,
                 test_loss += loss.item() * inputs.size(0)
 
             ## ----------- store codebook, latent space, and corresponding labels -------------
-            quant_b, _, id_b = model.encode(inputs)
+            quant_b, _, id_b, _, _ = model.encode(inputs)
             outputs = model.decode(quant_b)
             indices.append(id_b.cpu())
             quantizes.append(quant_b.cpu())
@@ -103,7 +105,7 @@ def save_indices_quantized_labels(model,loader,device,path_cfg, model_path, tag,
             for idx, (lbl, out) in enumerate(tqdm(zip(batch_labels, outputs), total=outputs.shape[0], desc="Saving reconstructions", leave=False)):#(zip(batch_labels, outputs)):
                 lbl_int = int(lbl)
                 #print(lbl_int)
-                class_folder = os.path.join(path_cfg['recostructed_imge'], str(lbl_int))
+                class_folder = os.path.join(path_cfg['recnstructed_imge'], str(lbl_int))
                 os.makedirs(class_folder, exist_ok=True)
                 save_file = os.path.join(class_folder, f"{lbl_int}_{k * loader.batch_size + idx + 1:05d}.png")
                 # Save tensor CHW safely (normalize from [-1,1] to [0,1])
@@ -114,12 +116,12 @@ def save_indices_quantized_labels(model,loader,device,path_cfg, model_path, tag,
     quantizes_tensor = torch.cat(quantizes, dim=0)
     labels = np.array(labels)
 
-    indices_path = os.path.join(model_path, f"{tag}_latent_space_vqvae_80x80_codebook_16x124.npy")
-    quantized_path = os.path.join(model_path, f"{tag}_codebook_vqvae_80x80_codebook_16x124.npy")
+    indices_path = os.path.join(model_path, f"{tag}_latent_space_vqvae_80x80_codebook_{codebook_size}.npy")
+    quantized_path = os.path.join(model_path, f"{tag}_codebook_vqvae_80x80_codebook_{codebook_size}.npy")
 
     np.save(indices_path, indices_tensor.numpy())
     np.save(quantized_path, quantizes_tensor.numpy())
-    np.save(os.path.join(model_path, f'{tag}_labels.npy'), labels)
+    np.save(os.path.join(model_path, f'{tag}_labels_{codebook_size}.npy'), labels)
     
     if (calculate_loss):
         test_loss /= len(loader.dataset)
@@ -160,7 +162,7 @@ def main():
 
      # Load best model checkpoint
     model_ckpt = load_best_model_path(model_path, epoch = num_epochs)
-    model = EnhancedFlatVQVAE().to(device)
+    model = FlatVQVAE().to(device)
     # Wrap with DDP only if torch.distributed is actually initialized
     if tdist.is_available() and tdist.is_initialized():
        model = DDP(model, device_ids=[device.index])
@@ -183,7 +185,7 @@ def main():
     # ---------- Test Evaluation ----------
     transform = transforms.Compose(
         [
-#            transforms.Resize((80,80)),
+            transforms.Resize((80,80)),
             transforms.ToTensor(),
             transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
         ]
@@ -203,7 +205,7 @@ def main():
     dataset_val = datasets.ImageFolder("/local/altamabp/UTKFace_dataset_subset_10000_structured", transform=transform)
     val_loader = get_loader(dataset_val, batch_size=batch_size, shuffle=False, distributed=False)
     
-    save_indices_quantized_labels(model, test_loader, device, path_cfg, model_path, 'test', best_params, calculate_loss=False)
+    save_indices_quantized_labels(model, test_loader, device, path_cfg, model_path, 'test', best_params, calculate_loss=True)
     save_indices_quantized_labels(model, train_loader, device, path_cfg, model_path, 'train', best_params, calculate_loss=False)
     save_indices_quantized_labels(model, val_loader, device, path_cfg, model_path, 'val', best_params, calculate_loss=False) 
     
@@ -221,7 +223,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--dist_url", default=f"tcp://127.0.0.1:{port}")
     parser.add_argument("--save_path_models", default="/local/altamabp/checkpoint_correct/vqvae/")
-    parser.add_argument("--save_path_imgs", default="/local/altamabp/image_correct/vqvae_reconstruction/")
+    parser.add_argument("--save_path_imgs", default="/local/altamabp/image_correct/vqvae_reconstruction_{codebook_size}/")
     parser.add_argument("--size", type=int, default=80)
     parser.add_argument("--epoch", type=int, default=100)
     parser.add_argument("--lr", type=float, default=1e-4)

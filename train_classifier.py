@@ -112,7 +112,7 @@ def decode_quantizes(model, quantizes, device="cuda:0", batch_size=16, use_autoc
 
 
 
-ckpt_vqvae = "./checkpoint_correct/vqvae/model_epoch100_flat_vqvae80x80_64x400codebook.pth"
+ckpt_vqvae = "./checkpoint_correct/vqvae/model_epoch100_flat_vqvae80x80_16x124codebook.pth"
 torch.cuda.set_device(1) 
 torch.cuda.empty_cache()
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -124,7 +124,7 @@ val_labels= np.load('./checkpoint_correct/vqvae/val_labels.npy')
 val_labels = torch.from_numpy(val_labels)
 #val_labels= F.one_hot(val_labels, num_classes=10).float()
 
-val_quantizes = np.load('./checkpoint_correct/vqvae/val_codebook_vqvae_80x80_codebook_64x456.npy')
+val_quantizes = np.load('./checkpoint_correct/vqvae/val_codebook_vqvae_80x80_codebook_16x124.npy')
 
 
 #### train set###
@@ -133,7 +133,7 @@ train_labels = np.load('./checkpoint_correct/vqvae/train_labels.npy')
 train_labels = torch.from_numpy(train_labels)
 #train_labels= F.one_hot(train_labels, num_classes=10).float()
 
-train_quantizes = np.load('./checkpoint_correct/vqvae/train_codebook_vqvae_80x80_codebook_64x456.npy')
+train_quantizes = np.load('./checkpoint_correct/vqvae/train_codebook_vqvae_80x80_codebook_61x124.npy')
 
 
 #### test set###
@@ -142,7 +142,7 @@ test_labels = np.load('./checkpoint_correct/vqvae/test_labels.npy')
 test_labels = torch.from_numpy(test_labels)
 #test_labels= F.one_hot(test_labels, num_classes=10).float()
 
-test_quantizes = np.load('./checkpoint_correct/vqvae/test_codebook_vqvae_80x80_codebook_64x456.npy')
+test_quantizes = np.load('./checkpoint_correct/vqvae/test_codebook_vqvae_80x80_codebook_16x124.npy')
 
 
 
@@ -186,7 +186,7 @@ test_loader = DataLoader(test_dataset, batch_size=batchsize_modified, shuffle=Tr
 
 transform = transforms.Compose(
     [
-        transforms.Resize((80,80)),
+#        transforms.Resize((80,80)),
         transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
     ]
 )
